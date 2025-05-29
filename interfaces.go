@@ -150,6 +150,7 @@ type EmailAttachment struct {
 // EmailPriority defines the priority level for emails.
 type EmailPriority string
 
+// EmailPriority constants represent different email priority levels.
 const (
 	EmailPriorityLow    EmailPriority = "low"
 	EmailPriorityNormal EmailPriority = "normal"
@@ -186,6 +187,7 @@ type TokenGenerator interface {
 // TokenFormat defines the format for generated tokens.
 type TokenFormat string
 
+// TokenFormat constants represent different token formats.
 const (
 	TokenFormatAlphanumeric TokenFormat = "alphanumeric" // A-Z, a-z, 0-9
 	TokenFormatHex          TokenFormat = "hex"          // 0-9, a-f
@@ -306,6 +308,7 @@ type LogField struct {
 // LogLevel defines the logging level.
 type LogLevel string
 
+// LogLevel constants represent different logging levels.
 const (
 	LogLevelDebug LogLevel = "debug"
 	LogLevelInfo  LogLevel = "info"

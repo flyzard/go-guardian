@@ -124,18 +124,27 @@ func (t *Token) MarkAsUsed() *Token {
 type SecurityEventType string
 
 const (
-	EventTypeLogin               SecurityEventType = "login"
-	EventTypeLoginFailed         SecurityEventType = "login_failed"
-	EventTypeLogout              SecurityEventType = "logout"
-	EventTypePasswordReset       SecurityEventType = "password_reset"
-	EventTypePasswordResetFailed SecurityEventType = "password_reset_failed"
-	EventTypePasswordChanged     SecurityEventType = "password_changed"
-	EventTypeEmailVerified       SecurityEventType = "email_verified"
-	EventTypeAccountLocked       SecurityEventType = "account_locked"
-	EventTypeSessionExpired      SecurityEventType = "session_expired"
-	EventTypeRateLimitExceeded   SecurityEventType = "rate_limit_exceeded"
-	EventTypeTwoFAEnabled        SecurityEventType = "two_fa_enabled"
-	EventTypeTwoFADisabled       SecurityEventType = "two_fa_disabled"
+	EventTypeLogin                   SecurityEventType = "login"
+	EventTypeLoginFailed             SecurityEventType = "login_failed"
+	EventTypeLogout                  SecurityEventType = "logout"
+	EventTypeLogoutAll               SecurityEventType = "logout_all"
+	EventTypePasswordReset           SecurityEventType = "password_reset"
+	EventTypePasswordResetFailed     SecurityEventType = "password_reset_failed"
+	EventTypePasswordChanged         SecurityEventType = "password_changed"
+	EventTypeEmailVerified           SecurityEventType = "email_verified"
+	EventTypeAccountLocked           SecurityEventType = "account_locked"
+	EventTypeSessionExpired          SecurityEventType = "session_expired"
+	EventTypeRateLimitExceeded       SecurityEventType = "rate_limit_exceeded"
+	EventTypeTwoFAEnabled            SecurityEventType = "two_fa_enabled"
+	EventTypeTwoFADisabled           SecurityEventType = "two_fa_disabled"
+	EventTypeUserRegistered          SecurityEventType = "user_registered"
+	EventTypeRegistrationFailed      SecurityEventType = "registration_failed"
+	EventTypeRegistrationRateLimited SecurityEventType = "registration_rate_limited"
+	EventTypeLoginRateLimited        SecurityEventType = "login_rate_limited"
+
+	// Additional event types for logout operations
+	SecurityEventUserLoggedOut    SecurityEventType = "user_logged_out"
+	SecurityEventUserLoggedOutAll SecurityEventType = "user_logged_out_all"
 )
 
 // SecurityEvent represents an audit log entry for security-related events.

@@ -1,4 +1,4 @@
-// Package go-guardian provides a comprehensive error handling system.
+// Package guardian provides a comprehensive error handling system.
 // All errors follow RFC 7807 Problem Details for HTTP APIs and support
 // error wrapping for better debugging and context preservation.
 package guardian
@@ -55,6 +55,7 @@ var (
 	ErrPasswordReuse   = errors.New("password was recently used")
 	ErrEmailInvalid    = errors.New("invalid email format")
 	ErrEmailExists     = errors.New("email already registered")
+	ErrInvalidUsername = errors.New("invalid username format")
 
 	// Rate limiting errors
 	ErrRateLimitExceeded = errors.New("rate limit exceeded")
@@ -67,6 +68,7 @@ var (
 	ErrMissingRequired  = errors.New("required field missing")
 	ErrInvalidFormat    = errors.New("invalid format")
 	ErrValueOutOfRange  = errors.New("value out of acceptable range")
+	ErrRequestTooLarge  = errors.New("request payload too large")
 
 	// Storage errors
 	ErrStorageUnavailable = errors.New("storage service unavailable")
@@ -91,6 +93,7 @@ var (
 // ErrorType represents the category of error for consistent handling.
 type ErrorType string
 
+// Predefined error types for categorization.
 const (
 	ErrorTypeAuthentication ErrorType = "authentication"
 	ErrorTypeAuthorization  ErrorType = "authorization"
