@@ -3,10 +3,12 @@ package tests
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	guardian "github.com/flyzard/go-guardian"
 	"github.com/gin-gonic/gin"
@@ -22,19 +24,35 @@ type AuthTestSuite struct {
 
 func (suite *AuthTestSuite) SetupSuite() {
 	gin.SetMode(gin.TestMode)
+}
+
+func (suite *AuthTestSuite) SetupTest() {
+	// Create test database with unique name for each test
+	timestamp := time.Now().UnixNano()
+	dbName := fmt.Sprintf("test_auth_%d.db", timestamp)
 
 	// Create test database
 	suite.guardian = guardian.New().
-		WithDatabase("test_auth.db").
-		WithJWTSecret("test-secret").
+		WithDatabase(dbName).
+		WithJWTSecret("test-secret-32-characters-long!").
+		WithEncryptionKey("default-encryption-key-32-chars!").
 		WithDebug(true)
 
 	err := suite.guardian.Initialize()
-	assert.NoError(suite.T(), err)
+	if err != nil {
+		suite.T().Fatalf("Failed to initialize Guardian: %v", err)
+	}
 
 	// Setup test router
 	suite.router = gin.New()
-	auth := suite.guardian.Auth().EnableRegistration()
+
+	// Check if auth manager exists
+	authManager := suite.guardian.Auth()
+	if authManager == nil {
+		suite.T().Fatal("Auth manager is nil after initialization")
+	}
+
+	auth := authManager.EnableRegistration()
 
 	suite.router.POST("/register", auth.Register())
 	suite.router.POST("/login", auth.Login())
@@ -48,18 +66,28 @@ func (suite *AuthTestSuite) SetupSuite() {
 	})
 }
 
+func (suite *AuthTestSuite) TearDownTest() {
+	if suite.guardian != nil {
+		// Get the database path before closing
+		dbPath := suite.guardian.Config().DatabasePath
+		suite.guardian.Close()
+		// Clean up the test database file
+		os.Remove(dbPath)
+	}
+}
+
 func (suite *AuthTestSuite) TearDownSuite() {
-	suite.guardian.Close()
+	// Clean up any remaining files
 	os.Remove("test_auth.db")
 }
 
 func (suite *AuthTestSuite) TestUserRegistration() {
 	registerData := map[string]string{
-		"email":            "test@example.com",
+		"email":            fmt.Sprintf("registration_%d@example.com", time.Now().UnixNano()),
 		"password":         "password123",
 		"password_confirm": "password123",
-		"first_name":       "Test",
-		"last_name":        "User",
+		"first_name":       "Registration",
+		"last_name":        "Test",
 	}
 
 	jsonData, _ := json.Marshal(registerData)
@@ -80,18 +108,35 @@ func (suite *AuthTestSuite) TestUserRegistration() {
 
 func (suite *AuthTestSuite) TestUserLogin() {
 	// First register a user
-	suite.TestUserRegistration()
-
-	loginData := map[string]string{
-		"email":    "test@example.com",
-		"password": "password123",
+	uniqueEmail := fmt.Sprintf("login_%d@example.com", time.Now().UnixNano())
+	registerData := map[string]string{
+		"email":            uniqueEmail,
+		"password":         "password123",
+		"password_confirm": "password123",
+		"first_name":       "Login",
+		"last_name":        "Test",
 	}
 
-	jsonData, _ := json.Marshal(loginData)
-	req, _ := http.NewRequest("POST", "/login", bytes.NewBuffer(jsonData))
+	jsonData, _ := json.Marshal(registerData)
+	req, _ := http.NewRequest("POST", "/register", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
+	suite.router.ServeHTTP(w, req)
+
+	assert.Equal(suite.T(), http.StatusCreated, w.Code)
+
+	// Now test login
+	loginData := map[string]string{
+		"email":    uniqueEmail,
+		"password": "password123",
+	}
+
+	jsonData, _ = json.Marshal(loginData)
+	req, _ = http.NewRequest("POST", "/login", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+
+	w = httptest.NewRecorder()
 	suite.router.ServeHTTP(w, req)
 
 	assert.Equal(suite.T(), http.StatusOK, w.Code)
@@ -119,19 +164,36 @@ func (suite *AuthTestSuite) TestInvalidLogin() {
 }
 
 func (suite *AuthTestSuite) TestProtectedRoute() {
-	// Login and get token
-	suite.TestUserRegistration()
-
-	loginData := map[string]string{
-		"email":    "test@example.com",
-		"password": "password123",
+	// First register a user
+	uniqueEmail := fmt.Sprintf("protected_%d@example.com", time.Now().UnixNano())
+	registerData := map[string]string{
+		"email":            uniqueEmail,
+		"password":         "password123",
+		"password_confirm": "password123",
+		"first_name":       "Protected",
+		"last_name":        "Test",
 	}
 
-	jsonData, _ := json.Marshal(loginData)
-	req, _ := http.NewRequest("POST", "/login", bytes.NewBuffer(jsonData))
+	jsonData, _ := json.Marshal(registerData)
+	req, _ := http.NewRequest("POST", "/register", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
+	suite.router.ServeHTTP(w, req)
+
+	assert.Equal(suite.T(), http.StatusCreated, w.Code)
+
+	// Login and get token
+	loginData := map[string]string{
+		"email":    uniqueEmail,
+		"password": "password123",
+	}
+
+	jsonData, _ = json.Marshal(loginData)
+	req, _ = http.NewRequest("POST", "/login", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+
+	w = httptest.NewRecorder()
 	suite.router.ServeHTTP(w, req)
 
 	var loginResponse map[string]interface{}

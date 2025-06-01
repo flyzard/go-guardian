@@ -3,9 +3,12 @@ package tests
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	guardian "github.com/flyzard/go-guardian"
+	"github.com/gin-contrib/sessions"
+	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -54,8 +57,17 @@ func TestRateLimit(t *testing.T) {
 func TestCSRFProtection(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	g := guardian.New()
+	g := guardian.New().WithDatabase("test_csrf.db")
+	err := g.Initialize()
+	assert.NoError(t, err)
+	defer g.Close()
+	defer os.Remove("test_csrf.db")
+
 	r := gin.New()
+
+	// Set up session store (required for CSRF middleware)
+	store := cookie.NewStore([]byte("secret"))
+	r.Use(sessions.Sessions("mysession", store))
 
 	r.Use(g.Security().CSRFMiddleware())
 	r.POST("/test", func(c *gin.Context) {

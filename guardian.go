@@ -57,7 +57,7 @@ func New() *Guardian {
 		LogLevel:      slog.LevelInfo,
 		JWTSecret:     []byte("default-jwt-secret-change-in-production"),
 		SessionSecret: []byte("default-session-secret-change-in-production"),
-		EncryptionKey: []byte("default-encryption-key-32-bytes!!"),
+		EncryptionKey: []byte("default-encryption-key-32-chars!"),
 	}
 
 	return &Guardian{
