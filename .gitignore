@@ -2,6 +2,9 @@ LICENSE
 PLAN.md
 PRD.md
 README.md
+docs/
+examples/
+MAKEFILE
 
 # Binaries for programs and plugins
 *.exe
