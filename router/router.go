@@ -1,4 +1,3 @@
-// Package router provides a custom router for handling HTTP routes
 package router
 
 import (
@@ -7,21 +6,19 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Router is a custom router that extends chi.Router
 type Router struct {
 	chi.Router
 	routes map[string]*Route
 }
 
-// Route represents a single route in the router
 type Route struct {
 	Pattern   string
 	Method    string
 	Handler   http.HandlerFunc
 	RouteName string
+	router    *Router // Reference to parent router
 }
 
-// New creates a new Router
 func New() *Router {
 	return &Router{
 		Router: chi.NewRouter(),
@@ -29,42 +26,36 @@ func New() *Router {
 	}
 }
 
-// GET adds a GET route to the router
 func (r *Router) GET(pattern string, handler http.HandlerFunc) *Route {
 	r.Router.Get(pattern, handler)
-	route := &Route{Pattern: pattern, Method: "GET", Handler: handler}
+	route := &Route{Pattern: pattern, Method: "GET", Handler: handler, router: r}
 	return route
 }
 
-// POST adds a POST route to the router
 func (r *Router) POST(pattern string, handler http.HandlerFunc) *Route {
 	r.Router.Post(pattern, handler)
-	route := &Route{Pattern: pattern, Method: "POST", Handler: handler}
+	route := &Route{Pattern: pattern, Method: "POST", Handler: handler, router: r}
 	return route
 }
 
-// PUT adds a PUT route to the router
 func (r *Router) PUT(pattern string, handler http.HandlerFunc) *Route {
 	r.Router.Put(pattern, handler)
-	route := &Route{Pattern: pattern, Method: "PUT", Handler: handler}
+	route := &Route{Pattern: pattern, Method: "PUT", Handler: handler, router: r}
 	return route
 }
 
-// DELETE adds a DELETE route to the router
 func (r *Router) DELETE(pattern string, handler http.HandlerFunc) *Route {
 	r.Router.Delete(pattern, handler)
-	route := &Route{Pattern: pattern, Method: "DELETE", Handler: handler}
+	route := &Route{Pattern: pattern, Method: "DELETE", Handler: handler, router: r}
 	return route
 }
 
-// PATCH adds a PATCH route to the router
 func (r *Router) PATCH(pattern string, handler http.HandlerFunc) *Route {
 	r.Router.Patch(pattern, handler)
-	route := &Route{Pattern: pattern, Method: "PATCH", Handler: handler}
+	route := &Route{Pattern: pattern, Method: "PATCH", Handler: handler, router: r}
 	return route
 }
 
-// Group creates a new route Group
 func (r *Router) Group(pattern string) *Group {
 	return &Group{
 		router:  r,
@@ -72,13 +63,14 @@ func (r *Router) Group(pattern string) *Group {
 	}
 }
 
-// SetName sets the name of the route
-func (route *Route) SetName(name string) *Route {
+func (route *Route) Name(name string) *Route {
 	route.RouteName = name
+	if route.router != nil {
+		route.router.routes[name] = route
+	}
 	return route
 }
 
-// URL generates a URL for a named route
 func (r *Router) URL(name string, params ...string) string {
 	if route, ok := r.routes[name]; ok {
 		// Simple URL generation - can be enhanced

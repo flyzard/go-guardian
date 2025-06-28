@@ -13,24 +13,21 @@ var (
 	emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
 )
 
-// RegisterInput represents the input for user registration
+// Input validation structs
 type RegisterInput struct {
 	Email    string `validate:"required,email,max=255"`
 	Password string `validate:"required,min=8,max=72"` // bcrypt limit is 72
 }
 
-// LoginInput represents the input for user login
 type LoginInput struct {
 	Email    string `validate:"required,email"`
 	Password string `validate:"required"`
 }
 
-// PasswordResetInput represents the input for password reset
 type PasswordResetInput struct {
 	Email string `validate:"required,email"`
 }
 
-// NewPasswordInput represents the input for setting a new password
 type NewPasswordInput struct {
 	Token    string `validate:"required,len=64"` // hex encoded 32 bytes
 	Password string `validate:"required,min=8,max=72"`

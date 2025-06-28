@@ -6,19 +6,16 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// Group represents a group of routes with a common pattern and middlewares
 type Group struct {
 	router      *Router
 	pattern     string
 	middlewares []func(http.Handler) http.Handler
 }
 
-// Use adds middleware to the group
 func (g *Group) Use(middleware ...func(http.Handler) http.Handler) {
 	g.middlewares = append(g.middlewares, middleware...)
 }
 
-// GET adds a GET route to the group
 func (g *Group) GET(pattern string, handler http.HandlerFunc) *Route {
 	fullPattern := g.pattern + pattern
 	g.router.Route(g.pattern, func(r chi.Router) {
@@ -27,10 +24,10 @@ func (g *Group) GET(pattern string, handler http.HandlerFunc) *Route {
 		}
 		r.Get(pattern, handler)
 	})
-	return &Route{Pattern: fullPattern, Method: "GET", Handler: handler}
+	route := &Route{Pattern: fullPattern, Method: "GET", Handler: handler, router: g.router}
+	return route
 }
 
-// POST adds a POST route to the group
 func (g *Group) POST(pattern string, handler http.HandlerFunc) *Route {
 	fullPattern := g.pattern + pattern
 	g.router.Route(g.pattern, func(r chi.Router) {
@@ -39,10 +36,10 @@ func (g *Group) POST(pattern string, handler http.HandlerFunc) *Route {
 		}
 		r.Post(pattern, handler)
 	})
-	return &Route{Pattern: fullPattern, Method: "POST", Handler: handler}
+	route := &Route{Pattern: fullPattern, Method: "POST", Handler: handler, router: g.router}
+	return route
 }
 
-// PUT adds a PUT route to the group
 func (g *Group) PUT(pattern string, handler http.HandlerFunc) *Route {
 	fullPattern := g.pattern + pattern
 	g.router.Route(g.pattern, func(r chi.Router) {
@@ -51,10 +48,10 @@ func (g *Group) PUT(pattern string, handler http.HandlerFunc) *Route {
 		}
 		r.Put(pattern, handler)
 	})
-	return &Route{Pattern: fullPattern, Method: "PUT", Handler: handler}
+	route := &Route{Pattern: fullPattern, Method: "PUT", Handler: handler, router: g.router}
+	return route
 }
 
-// DELETE adds a DELETE route to the group
 func (g *Group) DELETE(pattern string, handler http.HandlerFunc) *Route {
 	fullPattern := g.pattern + pattern
 	g.router.Route(g.pattern, func(r chi.Router) {
@@ -63,5 +60,6 @@ func (g *Group) DELETE(pattern string, handler http.HandlerFunc) *Route {
 		}
 		r.Delete(pattern, handler)
 	})
-	return &Route{Pattern: fullPattern, Method: "DELETE", Handler: handler}
+	route := &Route{Pattern: fullPattern, Method: "DELETE", Handler: handler, router: g.router}
+	return route
 }

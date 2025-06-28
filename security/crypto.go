@@ -1,4 +1,3 @@
-// Package security provides utilities for encrypting and decrypting data
 package security
 
 import (
@@ -52,8 +51,8 @@ func Decrypt(key []byte, ciphertext string) (string, error) {
 		return "", errors.New("ciphertext too short")
 	}
 
-	nonce, encData := data[:gcm.NonceSize()], data[gcm.NonceSize():]
-	plaintext, err := gcm.Open(nil, nonce, encData, nil)
+	nonce, ciphertextBytes := data[:gcm.NonceSize()], data[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, nil)
 	if err != nil {
 		return "", err
 	}

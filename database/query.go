@@ -6,12 +6,10 @@ import (
 	"strings"
 )
 
-// QueryBuilder provides a fluent interface for building SQL queries
 type QueryBuilder struct {
 	db *DB
 }
 
-// Query creates a new QueryBuilder instance
 func (db *DB) Query() *QueryBuilder {
 	return &QueryBuilder{db: db}
 }
@@ -25,7 +23,6 @@ func (qb *QueryBuilder) Select(table string, columns ...string) *SelectQuery {
 	}
 }
 
-// SelectQuery represents a SELECT query
 type SelectQuery struct {
 	db         *DB
 	table      string
@@ -42,13 +39,11 @@ type condition struct {
 	value  interface{}
 }
 
-// Where adds a WHERE clause to the query
 func (q *SelectQuery) Where(column, op string, value interface{}) *SelectQuery {
 	q.conditions = append(q.conditions, condition{column, op, value})
 	return q
 }
 
-// OrderBy adds an ORDER BY clause to the query
 func (q *SelectQuery) OrderBy(column string, desc bool) *SelectQuery {
 	if desc {
 		q.orderBy = column + " DESC"
@@ -58,19 +53,16 @@ func (q *SelectQuery) OrderBy(column string, desc bool) *SelectQuery {
 	return q
 }
 
-// Limit adds a LIMIT clause to the query
 func (q *SelectQuery) Limit(limit int) *SelectQuery {
 	q.limit = limit
 	return q
 }
 
-// Offset adds an OFFSET clause to the query
 func (q *SelectQuery) Offset(offset int) *SelectQuery {
 	q.offset = offset
 	return q
 }
 
-// Build constructs the SQL query and its arguments
 func (q *SelectQuery) Build() (string, []interface{}) {
 	var query strings.Builder
 	var args []interface{}
@@ -123,13 +115,11 @@ func (q *SelectQuery) Build() (string, []interface{}) {
 	return query.String(), args
 }
 
-// QueryRow executes the query and returns a single row
 func (q *SelectQuery) QueryRow() *sql.Row {
 	query, args := q.Build()
-	return q.db.QueryRow(query, args...)
+	return q.db.DB.QueryRow(query, args...)
 }
 
-// Query executes the query and returns the result set
 func (q *SelectQuery) Query() (*sql.Rows, error) {
 	query, args := q.Build()
 	return q.db.DB.Query(query, args...)
@@ -158,7 +148,7 @@ func (qb *QueryBuilder) Insert(table string, data map[string]interface{}) (sql.R
 		strings.Join(placeholders, ", "),
 	)
 
-	return qb.db.Exec(query, values...)
+	return qb.db.DB.Exec(query, values...)
 }
 
 // Update creates an UPDATE query
@@ -190,7 +180,7 @@ func (qb *QueryBuilder) Update(table string, data map[string]interface{}, where 
 		query += " WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	return qb.db.Exec(query, values...)
+	return qb.db.DB.Exec(query, values...)
 }
 
 // Delete creates a DELETE query
@@ -207,5 +197,5 @@ func (qb *QueryBuilder) Delete(table string, where map[string]interface{}) (sql.
 		query += " WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
-	return qb.db.Exec(query, values...)
+	return qb.db.DB.Exec(query, values...)
 }

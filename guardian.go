@@ -1,4 +1,3 @@
-// Package guardian provides a web framework with built-in authentication and database support.
 package guardian
 
 import (
@@ -17,9 +16,16 @@ import (
 )
 
 type Config struct {
-	SessionKey   []byte
-	DatabasePath string
-	Environment  string // "development" or "production"
+	SessionKey  []byte
+	Environment string // "development" or "production"
+
+	// Database configuration
+	DatabaseType    string // "sqlite" or "mysql"
+	DatabasePath    string // For SQLite
+	DatabaseDSN     string // For MySQL: "user:pass@tcp(localhost:3306)/dbname?parseTime=true"
+	MaxOpenConns    int    // Max open connections
+	MaxIdleConns    int    // Max idle connections
+	ConnMaxLifetime time.Duration
 }
 
 type Guardian struct {
@@ -36,16 +42,40 @@ func New(cfg Config) *Guardian {
 		panic("session key must be at least 32 bytes")
 	}
 
-	if cfg.DatabasePath == "" {
-		cfg.DatabasePath = "guardian.db"
-	}
-
 	if cfg.Environment == "" {
 		cfg.Environment = "development"
 	}
 
-	// Initialize database
-	db, err := database.New(cfg.DatabasePath)
+	// Set defaults for database
+	if cfg.DatabaseType == "" {
+		cfg.DatabaseType = "sqlite"
+	}
+
+	if cfg.DatabaseType == "sqlite" && cfg.DatabasePath == "" {
+		cfg.DatabasePath = "guardian.db"
+	}
+
+	// Initialize database based on type
+	var db *database.DB
+	var err error
+
+	switch cfg.DatabaseType {
+	case "sqlite":
+		db, err = database.NewSQLite(cfg.DatabasePath)
+	case "mysql":
+		if cfg.DatabaseDSN == "" {
+			panic("MySQL DSN is required")
+		}
+		db, err = database.NewMySQL(database.MySQLConfig{
+			DSN:             cfg.DatabaseDSN,
+			MaxOpenConns:    cfg.MaxOpenConns,
+			MaxIdleConns:    cfg.MaxIdleConns,
+			ConnMaxLifetime: cfg.ConnMaxLifetime,
+		})
+	default:
+		panic("unsupported database type: " + cfg.DatabaseType)
+	}
+
 	if err != nil {
 		panic("failed to initialize database: " + err.Error())
 	}
