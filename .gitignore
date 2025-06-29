@@ -5,6 +5,8 @@ README.md
 docs/
 examples/
 MAKEFILE
+.claude/
+CLAUDE.md
 
 # Binaries for programs and plugins
 *.exe

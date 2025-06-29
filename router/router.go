@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -65,17 +66,22 @@ func (route *Route) Name(name string) *Route {
 }
 
 func (r *Router) URL(name string, params ...string) string {
-	if route, ok := r.routes[name]; ok {
-		// Simple URL generation - can be enhanced
-		url := route.Pattern
-		for i := 0; i < len(params); i += 2 {
-			if i+1 < len(params) {
-				url = replaceParam(url, params[i], params[i+1])
-			}
-		}
-		return url
+	route, ok := r.routes[name]
+	if !ok {
+		return ""
 	}
-	return ""
+
+	url := route.Pattern
+
+	// Replace Chi-style parameters {param} with values
+	for i := 0; i < len(params); i += 2 {
+		if i+1 < len(params) {
+			param := "{" + params[i] + "}"
+			url = strings.ReplaceAll(url, param, params[i+1])
+		}
+	}
+
+	return url
 }
 
 func replaceParam(pattern, _, _ string) string {

@@ -103,6 +103,93 @@ var migrations = []Migration{
         `,
 		DownMySQL: `DROP TABLE IF EXISTS sessions;`,
 	},
+	{
+		Version: "004",
+		Name:    "create_roles_and_permissions",
+		UpSQLite: `
+		CREATE TABLE IF NOT EXISTS roles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL
+		);
+		
+		CREATE TABLE IF NOT EXISTS permissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL
+		);
+		
+		CREATE TABLE IF NOT EXISTS role_permissions (
+			role_id INTEGER NOT NULL,
+			permission_id INTEGER NOT NULL,
+			PRIMARY KEY (role_id, permission_id),
+			FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+			FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+		);
+		
+		CREATE TABLE IF NOT EXISTS remember_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token TEXT UNIQUE NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+		
+		ALTER TABLE users ADD COLUMN role_id INTEGER DEFAULT 1;
+		
+		-- Create default roles
+		INSERT INTO roles (name) VALUES ('user'), ('admin');
+		INSERT INTO permissions (name) VALUES ('user.view'), ('user.edit'), ('admin.access');
+		INSERT INTO role_permissions VALUES (1, 1), (2, 1), (2, 2), (2, 3);
+	`,
+		DownSQLite: `
+		DROP TABLE IF EXISTS role_permissions;
+		DROP TABLE IF EXISTS permissions;
+		DROP TABLE IF EXISTS roles;
+		DROP TABLE IF EXISTS remember_tokens;
+	`,
+		UpMySQL: `
+		CREATE TABLE IF NOT EXISTS roles (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			name VARCHAR(100) UNIQUE NOT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		CREATE TABLE IF NOT EXISTS permissions (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			name VARCHAR(100) UNIQUE NOT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		CREATE TABLE IF NOT EXISTS role_permissions (
+			role_id BIGINT NOT NULL,
+			permission_id BIGINT NOT NULL,
+			PRIMARY KEY (role_id, permission_id),
+			FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+			FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		CREATE TABLE IF NOT EXISTS remember_tokens (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			user_id BIGINT NOT NULL,
+			token VARCHAR(255) UNIQUE NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_remember_token (token),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		ALTER TABLE users ADD COLUMN role_id BIGINT DEFAULT 1;
+		
+		-- Create default roles
+		INSERT INTO roles (name) VALUES ('user'), ('admin');
+		INSERT INTO permissions (name) VALUES ('user.view'), ('user.edit'), ('admin.access');
+		INSERT INTO role_permissions VALUES (1, 1), (2, 1), (2, 2), (2, 3);
+	`,
+		DownMySQL: `
+		DROP TABLE IF EXISTS role_permissions;
+		DROP TABLE IF EXISTS permissions;
+		DROP TABLE IF EXISTS roles;
+		DROP TABLE IF EXISTS remember_tokens;
+	`,
+	},
 }
 
 func (db *DB) Migrate() error {

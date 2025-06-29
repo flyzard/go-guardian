@@ -66,6 +66,60 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request, email, password 
 	return session.Save(r, w)
 }
 
+// LoginWithRememberMe logs in the user with an option to remember the session
+func (s *Service) LoginWithRememberMe(w http.ResponseWriter, r *http.Request, email, password string, rememberMe bool) error {
+	user, err := s.findUserByEmail(email)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ErrInvalidCredentials
+		}
+		return err
+	}
+
+	// Check password
+	if !CheckPasswordHash(password, user.PasswordHash) {
+		return ErrInvalidCredentials
+	}
+
+	// Check if verified
+	if !user.Verified {
+		return ErrUserNotVerified
+	}
+
+	// After successful login
+	session, _ := s.store.New(r, "auth-session")
+	session.Values["user_id"] = user.ID
+	session.Values["email"] = user.Email
+
+	// Set longer expiration if remember me is checked
+	if rememberMe {
+		session.Options.MaxAge = 86400 * 30 // 30 days
+
+		// Create a remember token
+		token := GenerateToken()
+		_, err := s.db.Exec(`
+			INSERT INTO remember_tokens (user_id, token, expires_at)
+			VALUES (?, ?, ?)
+		`, user.ID, token, time.Now().Add(30*24*time.Hour))
+
+		if err == nil {
+			// Set remember me cookie
+			http.SetCookie(w, &http.Cookie{
+				Name:     "remember_token",
+				Value:    token,
+				MaxAge:   86400 * 30,
+				HttpOnly: true,
+				Secure:   true,
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
+	} else {
+		session.Options.MaxAge = 1800 // 30 minutes
+	}
+
+	return session.Save(r, w)
+}
+
 func (s *Service) Logout(w http.ResponseWriter, r *http.Request) error {
 	session, err := s.store.Get(r, "auth-session")
 	if err != nil {
