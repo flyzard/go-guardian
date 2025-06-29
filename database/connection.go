@@ -8,9 +8,42 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// TableMapping defines custom table names
+type TableMapping struct {
+	Users           string
+	Tokens          string
+	Sessions        string
+	Roles           string
+	Permissions     string
+	RolePermissions string
+	RememberTokens  string
+}
+
+// DefaultTableMapping returns the default table names
+func DefaultTableMapping() TableMapping {
+	return TableMapping{
+		Users:           "users",
+		Tokens:          "tokens",
+		Sessions:        "sessions",
+		Roles:           "roles",
+		Permissions:     "permissions",
+		RolePermissions: "role_permissions",
+		RememberTokens:  "remember_tokens",
+	}
+}
+
 type DB struct {
 	*sql.DB
-	dbType string // "sqlite" or "mysql"
+	dbType         string // "sqlite" or "mysql"
+	migrationTable string // Name of migrations table
+	tableNames     TableMapping
+}
+
+type SQLiteConfig struct {
+	Path           string
+	AutoMigrate    bool
+	MigrationTable string
+	TableNames     TableMapping
 }
 
 type MySQLConfig struct {
@@ -18,11 +51,24 @@ type MySQLConfig struct {
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
+	AutoMigrate     bool
+	MigrationTable  string
+	TableNames      TableMapping
 }
 
-// NewSQLite creates a new SQLite database connection
+// NewSQLite creates a new SQLite database connection with default config (backward compatible)
 func NewSQLite(path string) (*DB, error) {
-	db, err := sql.Open("sqlite3", path)
+	return NewSQLiteWithConfig(SQLiteConfig{
+		Path:           path,
+		AutoMigrate:    true,
+		MigrationTable: "migrations",
+		TableNames:     DefaultTableMapping(),
+	})
+}
+
+// NewSQLiteWithConfig creates a new SQLite database connection with custom config
+func NewSQLiteWithConfig(cfg SQLiteConfig) (*DB, error) {
+	db, err := sql.Open("sqlite3", cfg.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -41,21 +87,48 @@ func NewSQLite(path string) (*DB, error) {
 		return nil, err
 	}
 
-	wrapped := &DB{
-		DB:     db,
-		dbType: "sqlite",
+	// Set defaults
+	if cfg.TableNames == (TableMapping{}) {
+		cfg.TableNames = DefaultTableMapping()
+	}
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
 	}
 
-	// Run initial migrations
-	if err := wrapped.Migrate(); err != nil {
-		return nil, err
+	wrapped := &DB{
+		DB:             db,
+		dbType:         "sqlite",
+		migrationTable: cfg.MigrationTable,
+		tableNames:     cfg.TableNames,
+	}
+
+	// Run migrations only if AutoMigrate is true
+	if cfg.AutoMigrate {
+		if err := wrapped.Migrate(); err != nil {
+			return nil, err
+		}
 	}
 
 	return wrapped, nil
 }
 
-// NewMySQL creates a new MySQL database connection
+// NewMySQL creates a new MySQL database connection with default config (backward compatible)
 func NewMySQL(cfg MySQLConfig) (*DB, error) {
+	// Set defaults for backward compatibility
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
+	}
+	if !cfg.AutoMigrate {
+		cfg.AutoMigrate = true
+	}
+	if cfg.TableNames == (TableMapping{}) {
+		cfg.TableNames = DefaultTableMapping()
+	}
+	return NewMySQLWithConfig(cfg)
+}
+
+// NewMySQLWithConfig creates a new MySQL database connection with custom config
+func NewMySQLWithConfig(cfg MySQLConfig) (*DB, error) {
 	// DSN format: "user:password@tcp(localhost:3306)/dbname?parseTime=true&loc=Local"
 	// parseTime=true is REQUIRED for proper time.Time scanning
 	db, err := sql.Open("mysql", cfg.DSN)
@@ -87,14 +160,26 @@ func NewMySQL(cfg MySQLConfig) (*DB, error) {
 		return nil, err
 	}
 
-	wrapped := &DB{
-		DB:     db,
-		dbType: "mysql",
+	// Set defaults
+	if cfg.TableNames == (TableMapping{}) {
+		cfg.TableNames = DefaultTableMapping()
+	}
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
 	}
 
-	// Run initial migrations
-	if err := wrapped.Migrate(); err != nil {
-		return nil, err
+	wrapped := &DB{
+		DB:             db,
+		dbType:         "mysql",
+		migrationTable: cfg.MigrationTable,
+		tableNames:     cfg.TableNames,
+	}
+
+	// Run migrations only if AutoMigrate is true
+	if cfg.AutoMigrate {
+		if err := wrapped.Migrate(); err != nil {
+			return nil, err
+		}
 	}
 
 	return wrapped, nil
@@ -106,4 +191,47 @@ func (db *DB) Close() error {
 
 func (db *DB) Type() string {
 	return db.dbType
+}
+
+func (db *DB) MigrationTable() string {
+	if db.migrationTable == "" {
+		return "migrations"
+	}
+	return db.migrationTable
+}
+
+func (db *DB) TableNames() TableMapping {
+	if db.tableNames == (TableMapping{}) {
+		return DefaultTableMapping()
+	}
+	return db.tableNames
+}
+
+// Table name getters for easy access
+func (db *DB) UsersTable() string {
+	return db.tableNames.Users
+}
+
+func (db *DB) TokensTable() string {
+	return db.tableNames.Tokens
+}
+
+func (db *DB) SessionsTable() string {
+	return db.tableNames.Sessions
+}
+
+func (db *DB) RolesTable() string {
+	return db.tableNames.Roles
+}
+
+func (db *DB) PermissionsTable() string {
+	return db.tableNames.Permissions
+}
+
+func (db *DB) RolePermissionsTable() string {
+	return db.tableNames.RolePermissions
+}
+
+func (db *DB) RememberTokensTable() string {
+	return db.tableNames.RememberTokens
 }

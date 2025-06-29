@@ -3,6 +3,7 @@ package auth
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -15,9 +16,40 @@ var (
 	ErrUserNotVerified    = errors.New("email not verified")
 )
 
+// TableConfig defines table names for auth operations
+type TableConfig struct {
+	Users           string
+	Tokens          string
+	Sessions        string
+	Roles           string
+	Permissions     string
+	RolePermissions string
+	RememberTokens  string
+}
+
+// DefaultTableConfig returns the default table names
+func DefaultTableConfig() TableConfig {
+	return TableConfig{
+		Users:           "users",
+		Tokens:          "tokens",
+		Sessions:        "sessions",
+		Roles:           "roles",
+		Permissions:     "permissions",
+		RolePermissions: "role_permissions",
+		RememberTokens:  "remember_tokens",
+	}
+}
+
+type ServiceConfig struct {
+	Store      sessions.Store
+	DB         *sql.DB
+	TableNames TableConfig
+}
+
 type Service struct {
-	store sessions.Store
-	db    *sql.DB
+	store  sessions.Store
+	db     *sql.DB
+	tables TableConfig
 }
 
 type User struct {
@@ -28,10 +60,26 @@ type User struct {
 	CreatedAt    time.Time
 }
 
+// NewService creates a new auth service with default table names (backward compatible)
 func NewService(store sessions.Store, db *sql.DB) *Service {
+	return NewServiceWithConfig(ServiceConfig{
+		Store:      store,
+		DB:         db,
+		TableNames: DefaultTableConfig(),
+	})
+}
+
+// NewServiceWithConfig creates a new auth service with custom table names
+func NewServiceWithConfig(cfg ServiceConfig) *Service {
+	// Set defaults if not provided
+	if cfg.TableNames == (TableConfig{}) {
+		cfg.TableNames = DefaultTableConfig()
+	}
+
 	return &Service{
-		store: store,
-		db:    db,
+		store:  cfg.Store,
+		db:     cfg.DB,
+		tables: cfg.TableNames,
 	}
 }
 
@@ -97,10 +145,12 @@ func (s *Service) LoginWithRememberMe(w http.ResponseWriter, r *http.Request, em
 
 		// Create a remember token
 		token := GenerateToken()
-		_, err := s.db.Exec(`
-			INSERT INTO remember_tokens (user_id, token, expires_at)
+		query := fmt.Sprintf(`
+			INSERT INTO %s (user_id, token, expires_at)
 			VALUES (?, ?, ?)
-		`, user.ID, token, time.Now().Add(30*24*time.Hour))
+		`, s.tables.RememberTokens)
+
+		_, err := s.db.Exec(query, user.ID, token, time.Now().Add(30*24*time.Hour))
 
 		if err == nil {
 			// Set remember me cookie
@@ -145,10 +195,12 @@ func (s *Service) Register(email, password string) (*User, error) {
 	}
 
 	// Insert user
-	result, err := s.db.Exec(`
-        INSERT INTO users (email, password_hash, verified, created_at)
+	query := fmt.Sprintf(`
+        INSERT INTO %s (email, password_hash, verified, created_at)
         VALUES (?, ?, ?, ?)
-    `, email, hash, false, time.Now())
+    `, s.tables.Users)
+
+	result, err := s.db.Exec(query, email, hash, false, time.Now())
 
 	if err != nil {
 		return nil, err
@@ -181,12 +233,14 @@ func (s *Service) GetUser(r *http.Request) (*User, error) {
 
 func (s *Service) findUserByEmail(email string) (*User, error) {
 	var user User
-	err := s.db.QueryRow(`
+	query := fmt.Sprintf(`
         SELECT id, email, password_hash, verified, created_at
-        FROM users
+        FROM %s
         WHERE email = ?
         LIMIT 1
-    `, email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Verified, &user.CreatedAt)
+    `, s.tables.Users)
+
+	err := s.db.QueryRow(query, email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Verified, &user.CreatedAt)
 
 	if err != nil {
 		return nil, err
@@ -197,12 +251,14 @@ func (s *Service) findUserByEmail(email string) (*User, error) {
 
 func (s *Service) findUserByID(id int64) (*User, error) {
 	var user User
-	err := s.db.QueryRow(`
+	query := fmt.Sprintf(`
         SELECT id, email, password_hash, verified, created_at
-        FROM users
+        FROM %s
         WHERE id = ?
         LIMIT 1
-    `, id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Verified, &user.CreatedAt)
+    `, s.tables.Users)
+
+	err := s.db.QueryRow(query, id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Verified, &user.CreatedAt)
 
 	if err != nil {
 		return nil, err

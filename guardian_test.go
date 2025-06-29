@@ -14,10 +14,12 @@ import (
 func TestFullAuthenticationFlow(t *testing.T) {
 	// Setup Guardian app
 	app := New(Config{
-		SessionKey:   []byte("test-secret-key-32-bytes-long!!!"),
-		DatabaseType: "sqlite",
-		DatabasePath: ":memory:",
-		Environment:  "development",
+		SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+		DatabaseType:   "sqlite",
+		DatabasePath:   ":memory:",
+		Environment:    "development",
+		AutoMigrate:    true,
+		ValidateSchema: true,
 	})
 	defer app.DB().Close()
 
@@ -144,10 +146,12 @@ func TestFullAuthenticationFlow(t *testing.T) {
 
 func TestSessionSecurity(t *testing.T) {
 	app := New(Config{
-		SessionKey:   []byte("test-secret-key-32-bytes-long!!!"),
-		DatabaseType: "sqlite",
-		DatabasePath: ":memory:",
-		Environment:  "production", // Test secure cookies
+		SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+		DatabaseType:   "sqlite",
+		DatabasePath:   ":memory:",
+		Environment:    "production", // Test secure cookies
+		AutoMigrate:    true,
+		ValidateSchema: true,
 	})
 	defer app.DB().Close()
 

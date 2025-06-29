@@ -2,6 +2,7 @@ package auth
 
 import (
 	"errors"
+	"fmt"
 )
 
 type Role struct {
@@ -24,24 +25,28 @@ var (
 
 func (s *Service) GetUserRole(userID int64) (*Role, error) {
 	var role Role
-	err := s.db.QueryRow(`
+	query := fmt.Sprintf(`
 		SELECT r.id, r.name 
-		FROM roles r
-		JOIN users u ON u.role_id = r.id
+		FROM %s r
+		JOIN %s u ON u.role_id = r.id
 		WHERE u.id = ?
-	`, userID).Scan(&role.ID, &role.Name)
+	`, s.tables.Roles, s.tables.Users)
+
+	err := s.db.QueryRow(query, userID).Scan(&role.ID, &role.Name)
 
 	if err != nil {
 		return nil, err
 	}
 
 	// Load permissions
-	rows, err := s.db.Query(`
+	permQuery := fmt.Sprintf(`
 		SELECT p.name 
-		FROM permissions p
-		JOIN role_permissions rp ON rp.permission_id = p.id
+		FROM %s p
+		JOIN %s rp ON rp.permission_id = p.id
 		WHERE rp.role_id = ?
-	`, role.ID)
+	`, s.tables.Permissions, s.tables.RolePermissions)
+
+	rows, err := s.db.Query(permQuery, role.ID)
 
 	if err != nil {
 		return nil, err
@@ -60,13 +65,15 @@ func (s *Service) GetUserRole(userID int64) (*Role, error) {
 
 func (s *Service) UserHasPermission(userID int64, permission string) bool {
 	var count int
-	err := s.db.QueryRow(`
+	query := fmt.Sprintf(`
 		SELECT COUNT(*) 
-		FROM users u
-		JOIN role_permissions rp ON rp.role_id = u.role_id
-		JOIN permissions p ON p.id = rp.permission_id
+		FROM %s u
+		JOIN %s rp ON rp.role_id = u.role_id
+		JOIN %s p ON p.id = rp.permission_id
 		WHERE u.id = ? AND p.name = ?
-	`, userID, permission).Scan(&count)
+	`, s.tables.Users, s.tables.RolePermissions, s.tables.Permissions)
+
+	err := s.db.QueryRow(query, userID, permission).Scan(&count)
 
 	return err == nil && count > 0
 }

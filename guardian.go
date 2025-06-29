@@ -1,3 +1,4 @@
+// File: guardian.go
 package guardian
 
 import (
@@ -15,6 +16,30 @@ import (
 	"github.com/gorilla/sessions"
 )
 
+// TableNames allows customizing table names
+type TableNames struct {
+	Users           string
+	Tokens          string
+	Sessions        string
+	Roles           string
+	Permissions     string
+	RolePermissions string
+	RememberTokens  string
+}
+
+// DefaultTableNames returns the default table names
+func DefaultTableNames() TableNames {
+	return TableNames{
+		Users:           "users",
+		Tokens:          "tokens",
+		Sessions:        "sessions",
+		Roles:           "roles",
+		Permissions:     "permissions",
+		RolePermissions: "role_permissions",
+		RememberTokens:  "remember_tokens",
+	}
+}
+
 type Config struct {
 	SessionKey  []byte
 	Environment string // "development" or "production"
@@ -26,6 +51,14 @@ type Config struct {
 	MaxOpenConns    int    // Max open connections
 	MaxIdleConns    int    // Max idle connections
 	ConnMaxLifetime time.Duration
+
+	// Migration configuration
+	AutoMigrate    bool   // Whether to run migrations automatically (default: true)
+	ValidateSchema bool   // Whether to validate required tables exist (default: true)
+	MigrationTable string // Custom migration table name (default: "migrations")
+
+	// Table name mapping
+	TableNames TableNames // Custom table names (default: standard names)
 }
 
 type Guardian struct {
@@ -55,22 +88,69 @@ func New(cfg Config) *Guardian {
 		cfg.DatabasePath = "guardian.db"
 	}
 
+	// Set defaults for migrations
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
+	}
+
+	// Set default table names if not provided
+	if cfg.TableNames == (TableNames{}) {
+		cfg.TableNames = DefaultTableNames()
+	} else {
+		// Fill in any missing table names with defaults
+		defaults := DefaultTableNames()
+		if cfg.TableNames.Users == "" {
+			cfg.TableNames.Users = defaults.Users
+		}
+		if cfg.TableNames.Tokens == "" {
+			cfg.TableNames.Tokens = defaults.Tokens
+		}
+		if cfg.TableNames.Sessions == "" {
+			cfg.TableNames.Sessions = defaults.Sessions
+		}
+		if cfg.TableNames.Roles == "" {
+			cfg.TableNames.Roles = defaults.Roles
+		}
+		if cfg.TableNames.Permissions == "" {
+			cfg.TableNames.Permissions = defaults.Permissions
+		}
+		if cfg.TableNames.RolePermissions == "" {
+			cfg.TableNames.RolePermissions = defaults.RolePermissions
+		}
+		if cfg.TableNames.RememberTokens == "" {
+			cfg.TableNames.RememberTokens = defaults.RememberTokens
+		}
+	}
+
+	// Default to true for backward compatibility
+	if !cfg.AutoMigrate && cfg.ValidateSchema == false {
+		cfg.ValidateSchema = true
+	}
+
 	// Initialize database based on type
 	var db *database.DB
 	var err error
 
 	switch cfg.DatabaseType {
 	case "sqlite":
-		db, err = database.NewSQLite(cfg.DatabasePath)
+		db, err = database.NewSQLiteWithConfig(database.SQLiteConfig{
+			Path:           cfg.DatabasePath,
+			AutoMigrate:    cfg.AutoMigrate,
+			MigrationTable: cfg.MigrationTable,
+			TableNames:     database.TableMapping(cfg.TableNames),
+		})
 	case "mysql":
 		if cfg.DatabaseDSN == "" {
 			panic("MySQL DSN is required")
 		}
-		db, err = database.NewMySQL(database.MySQLConfig{
+		db, err = database.NewMySQLWithConfig(database.MySQLConfig{
 			DSN:             cfg.DatabaseDSN,
 			MaxOpenConns:    cfg.MaxOpenConns,
 			MaxIdleConns:    cfg.MaxIdleConns,
 			ConnMaxLifetime: cfg.ConnMaxLifetime,
+			AutoMigrate:     cfg.AutoMigrate,
+			MigrationTable:  cfg.MigrationTable,
+			TableNames:      database.TableMapping(cfg.TableNames),
 		})
 	default:
 		panic("unsupported database type: " + cfg.DatabaseType)
@@ -78,6 +158,17 @@ func New(cfg Config) *Guardian {
 
 	if err != nil {
 		panic("failed to initialize database: " + err.Error())
+	}
+
+	// Validate schema if requested
+	if cfg.ValidateSchema {
+		validator := database.NewSchemaValidator(db)
+		if err := validator.ValidateWithMapping(database.TableMapping(cfg.TableNames)); err != nil {
+			panic("schema validation failed: " + err.Error() +
+				"\nPlease ensure all required tables and columns exist. " +
+				"See database/SCHEMA.md for requirements.")
+		}
+		log.Println("✓ Database schema validated successfully")
 	}
 
 	// Initialize session store
@@ -90,8 +181,12 @@ func New(cfg Config) *Guardian {
 		SameSite: http.SameSiteLaxMode,
 	}
 
-	// Initialize auth service
-	authService := auth.NewService(sessionStore, db.DB)
+	// Initialize auth service with table names
+	authService := auth.NewServiceWithConfig(auth.ServiceConfig{
+		Store:      sessionStore,
+		DB:         db.DB,
+		TableNames: auth.TableConfig(cfg.TableNames),
+	})
 
 	// Initialize router
 	r := router.New()
@@ -174,4 +269,20 @@ func (g *Guardian) Listen(addr string) error {
 
 	log.Printf("Guardian server starting on %s", addr)
 	return srv.ListenAndServe()
+}
+
+// RunMigrations manually runs Guardian's migrations
+// This is useful if you want to run migrations separately from app initialization
+func (g *Guardian) RunMigrations() error {
+	return g.db.Migrate()
+}
+
+// RunSpecificMigrations runs only specific migrations by version
+func (g *Guardian) RunSpecificMigrations(versions ...string) error {
+	return g.db.MigrateUp(versions...)
+}
+
+// GetAvailableMigrations returns all Guardian migrations for inspection
+func GetAvailableMigrations() []database.Migration {
+	return database.GetMigrations()
 }

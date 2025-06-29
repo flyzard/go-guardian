@@ -3,6 +3,7 @@ package auth
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"time"
 )
 
@@ -28,10 +29,12 @@ func (s *Service) CreateVerificationToken(userID int64) (*Token, error) {
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
 
-	_, err := s.db.Exec(`
-        INSERT INTO tokens (token, user_id, purpose, expires_at)
+	query := fmt.Sprintf(`
+        INSERT INTO %s (token, user_id, purpose, expires_at)
         VALUES (?, ?, ?, ?)
-    `, token.Value, token.UserID, token.Purpose, token.ExpiresAt)
+    `, s.tables.Tokens)
+
+	_, err := s.db.Exec(query, token.Value, token.UserID, token.Purpose, token.ExpiresAt)
 
 	return token, err
 }
@@ -49,22 +52,26 @@ func (s *Service) CreatePasswordResetToken(email string) (*Token, error) {
 		ExpiresAt: time.Now().Add(1 * time.Hour),
 	}
 
-	_, err = s.db.Exec(`
-        INSERT INTO tokens (token, user_id, purpose, expires_at)
+	query := fmt.Sprintf(`
+        INSERT INTO %s (token, user_id, purpose, expires_at)
         VALUES (?, ?, ?, ?)
-    `, token.Value, token.UserID, token.Purpose, token.ExpiresAt)
+    `, s.tables.Tokens)
+
+	_, err = s.db.Exec(query, token.Value, token.UserID, token.Purpose, token.ExpiresAt)
 
 	return token, err
 }
 
 func (s *Service) ValidateToken(value, purpose string) (*Token, error) {
 	var token Token
-	err := s.db.QueryRow(`
+	query := fmt.Sprintf(`
         SELECT token, user_id, purpose, expires_at
-        FROM tokens
+        FROM %s
         WHERE token = ? AND purpose = ? AND expires_at > ?
         LIMIT 1
-    `, value, purpose, time.Now()).Scan(
+    `, s.tables.Tokens)
+
+	err := s.db.QueryRow(query, value, purpose, time.Now()).Scan(
 		&token.Value,
 		&token.UserID,
 		&token.Purpose,
@@ -76,7 +83,8 @@ func (s *Service) ValidateToken(value, purpose string) (*Token, error) {
 	}
 
 	// Delete token after use
-	s.db.Exec("DELETE FROM tokens WHERE token = ?", value)
+	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE token = ?", s.tables.Tokens)
+	s.db.Exec(deleteQuery, value)
 
 	return &token, nil
 }

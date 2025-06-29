@@ -14,6 +14,69 @@ type Migration struct {
 	DownMySQL  string
 }
 
+// GetMigrations returns all available migrations
+// This is now exported so users can access migrations if needed
+func GetMigrations() []Migration {
+	return migrations
+}
+
+// GetRequiredTables returns the tables required by Guardian
+// This is useful for users who want to validate their custom schema
+func GetRequiredTables() map[string][]string {
+	// Return the tables defined in schema.go
+	return map[string][]string{
+		"users": {
+			"id",
+			"email",
+			"password_hash",
+			"verified",
+			"created_at",
+			"role_id", // Optional, for RBAC
+		},
+		"tokens": {
+			"id",
+			"token",
+			"user_id",
+			"purpose",
+			"expires_at",
+			"created_at",
+		},
+		"sessions": {
+			"id",
+			"user_id",
+			"data",
+			"expires_at",
+			"created_at",
+		},
+	}
+}
+
+// GetOptionalTables returns the optional RBAC tables
+func GetOptionalTables() map[string][]string {
+	// Return the optional tables defined in schema.go
+	return map[string][]string{
+		"roles": {
+			"id",
+			"name",
+		},
+		"permissions": {
+			"id",
+			"name",
+		},
+		"role_permissions": {
+			"role_id",
+			"permission_id",
+		},
+		"remember_tokens": {
+			"id",
+			"user_id",
+			"token",
+			"expires_at",
+			"created_at",
+		},
+	}
+}
+
 var migrations = []Migration{
 	{
 		Version: "001",
@@ -193,8 +256,8 @@ var migrations = []Migration{
 }
 
 func (db *DB) Migrate() error {
-	// Create migrations table based on database type
-	migrationTableSQL := getMigrationTableSQL(db.dbType)
+	// Create migrations table based on database type with configurable name
+	migrationTableSQL := getMigrationTableSQL(db.dbType, db.MigrationTable())
 	if _, err := db.DB.Exec(migrationTableSQL); err != nil {
 		return err
 	}
@@ -209,30 +272,55 @@ func (db *DB) Migrate() error {
 	return nil
 }
 
-func getMigrationTableSQL(dbType string) string {
+// MigrateUp runs specific migrations by version
+func (db *DB) MigrateUp(versions ...string) error {
+	// Create migrations table if it doesn't exist
+	migrationTableSQL := getMigrationTableSQL(db.dbType, db.MigrationTable())
+	if _, err := db.DB.Exec(migrationTableSQL); err != nil {
+		return err
+	}
+
+	versionMap := make(map[string]bool)
+	for _, v := range versions {
+		versionMap[v] = true
+	}
+
+	for _, m := range migrations {
+		if len(versions) == 0 || versionMap[m.Version] {
+			if err := db.runMigration(m); err != nil {
+				return fmt.Errorf("migration %s failed: %w", m.Version, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func getMigrationTableSQL(dbType, tableName string) string {
 	if dbType == "mysql" {
-		return `
-            CREATE TABLE IF NOT EXISTS migrations (
+		return fmt.Sprintf(`
+            CREATE TABLE IF NOT EXISTS %s (
                 version VARCHAR(10) PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
                 applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        `
+        `, tableName)
 	}
 	// SQLite
-	return `
-        CREATE TABLE IF NOT EXISTS migrations (
+	return fmt.Sprintf(`
+        CREATE TABLE IF NOT EXISTS %s (
             version TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
-    `
+    `, tableName)
 }
 
 func (db *DB) runMigration(m Migration) error {
 	// Check if already applied
 	var count int
-	err := db.DB.QueryRow("SELECT COUNT(*) FROM migrations WHERE version = ?", m.Version).Scan(&count)
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE version = ?", db.MigrationTable())
+	err := db.DB.QueryRow(query, m.Version).Scan(&count)
 	if err != nil {
 		return err
 	}
@@ -263,10 +351,11 @@ func (db *DB) runMigration(m Migration) error {
 		return err
 	}
 
-	if _, err := tx.Exec(
-		"INSERT INTO migrations (version, name) VALUES (?, ?)",
-		m.Version, m.Name,
-	); err != nil {
+	insertQuery := fmt.Sprintf(
+		"INSERT INTO %s (version, name) VALUES (?, ?)",
+		db.MigrationTable(),
+	)
+	if _, err := tx.Exec(insertQuery, m.Version, m.Name); err != nil {
 		return err
 	}
 
