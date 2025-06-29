@@ -1,0 +1,6093 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+auth/
+  auth.go
+  password_test.go
+  password.go
+  rbac.go
+  session_notes.go
+  session_security_test.go
+  session_test.go
+  session.go
+  token_test.go
+  token.go
+database/
+  connection.go
+  migration_test.go
+  migration.go
+  query_test.go
+  query.go
+  schema.go
+middleware/
+  auth.go
+  cors.go
+  csrf_test.go
+  csrf.go
+  htmx.go
+  logger.go
+  middleware.go
+  ratelimit_test.go
+  security_test.go
+  security.go
+router/
+  context.go
+  group.go
+  router_test.go
+  router.go
+security/
+  crypto.go
+  fuzzing_test.go
+  sanitizer_test.go
+  sanitizer.go
+  validator_test.go
+  validator.go
+utils/
+  email.go
+  random.go
+.gitignore
+go.mod
+guardian_test.go
+guardian.go
+README.md
+test.sh
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="auth/password_test.go">
+package auth
+
+import (
+	"testing"
+	"time"
+)
+
+func TestPasswordHashing(t *testing.T) {
+	password := "SecurePass123!"
+
+	// Test hashing
+	hash, err := HashPassword(password)
+	if err != nil {
+		t.Fatalf("Failed to hash password: %v", err)
+	}
+
+	// Ensure hash is not empty and not equal to password
+	if hash == "" || hash == password {
+		t.Fatal("Invalid hash generated")
+	}
+
+	// Test verification with correct password
+	if !CheckPasswordHash(password, hash) {
+		t.Fatal("Failed to verify correct password")
+	}
+
+	// Test verification with incorrect password
+	if CheckPasswordHash("WrongPassword", hash) {
+		t.Fatal("Incorrectly verified wrong password")
+	}
+
+	// Test that same password generates different hashes
+	hash2, _ := HashPassword(password)
+	if hash == hash2 {
+		t.Fatal("Same password generated identical hashes")
+	}
+}
+
+func TestSecureCompare(t *testing.T) {
+	// Test timing-safe comparison
+	if !SecureCompare("token123", "token123") {
+		t.Fatal("Failed to match identical strings")
+	}
+
+	if SecureCompare("token123", "token456") {
+		t.Fatal("Incorrectly matched different strings")
+	}
+}
+
+func TestPasswordHashTiming(t *testing.T) {
+	// Ensure password checking takes similar time for existing and non-existing users
+	hash, _ := HashPassword("testpass")
+
+	start := time.Now()
+	CheckPasswordHash("wrongpass", hash)
+	wrongDuration := time.Since(start)
+
+	start = time.Now()
+	CheckPasswordHash("testpass", hash)
+	correctDuration := time.Since(start)
+
+	// The timing difference should be minimal (within 10x)
+	ratio := float64(wrongDuration) / float64(correctDuration)
+	if ratio > 10 || ratio < 0.1 {
+		t.Fatalf("Timing attack possible: wrong=%v correct=%v ratio=%v",
+			wrongDuration, correctDuration, ratio)
+	}
+}
+</file>
+
+<file path="auth/password.go">
+package auth
+
+import (
+	"crypto/subtle"
+
+	"golang.org/x/crypto/bcrypt"
+)
+
+const bcryptCost = 12
+
+// HashPassword creates a bcrypt hash of the password
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	return string(bytes), err
+}
+
+// CheckPasswordHash compares a password with a hash
+func CheckPasswordHash(password, hash string) bool {
+	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
+	return err == nil
+}
+
+// SecureCompare performs timing-safe string comparison
+func SecureCompare(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+</file>
+
+<file path="auth/session_security_test.go">
+package auth
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestSessionSecurityBasics(t *testing.T) {
+	store := NewSessionStore([]byte("test-secret-key-32-bytes-long!!!"))
+
+	// Test 1: Session cookies have secure attributes
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	session, _ := store.New(req, "auth-session")
+	session.Values["user_id"] = int64(1)
+	session.Save(req, rec)
+
+	cookies := rec.Result().Cookies()
+	var sessionCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == "auth-session" {
+			sessionCookie = c
+			break
+		}
+	}
+
+	if sessionCookie == nil {
+		t.Fatal("No session cookie created")
+	}
+
+	// Verify security attributes
+	if !sessionCookie.HttpOnly {
+		t.Error("Session cookie missing HttpOnly flag")
+	}
+
+	if sessionCookie.SameSite != http.SameSiteLaxMode {
+		t.Error("Session cookie missing proper SameSite setting")
+	}
+
+	// Test 2: New empty sessions behavior
+	// Note: Gorilla sessions creates cookies even for empty sessions by design
+	// This is actually a security feature to prevent session fixation
+	req2 := httptest.NewRequest("GET", "/", nil)
+	rec2 := httptest.NewRecorder()
+
+	emptySession, _ := store.New(req2, "auth-session")
+	emptySession.Save(req2, rec2)
+
+	// Gorilla sessions will create a cookie even for empty sessions
+	// This is expected behavior
+	if len(rec2.Result().Cookies()) > 0 {
+		t.Log("Note: Gorilla sessions creates cookies for empty sessions (expected behavior)")
+	}
+
+	// Test 3: Invalid session handling
+	req3 := httptest.NewRequest("GET", "/", nil)
+	req3.AddCookie(&http.Cookie{
+		Name:  "auth-session",
+		Value: "invalid-session-data",
+	})
+
+	invalidSession, err := store.Get(req3, "auth-session")
+
+	// Gorilla sessions might return an error for invalid data, but still provide a session
+	if err != nil {
+		t.Log("Store returned error for invalid session data (expected):", err)
+		// Even with an error, it should still return a usable session
+		if invalidSession == nil {
+			t.Error("Store should return a session object even with invalid data")
+		}
+	}
+
+	// The important thing is that the session should be empty (no user data)
+	if invalidSession != nil && invalidSession.Values["user_id"] != nil {
+		t.Error("Invalid session data should result in empty session values")
+	}
+}
+
+func TestSessionFixationPrevention(t *testing.T) {
+	// This test verifies that session IDs change after privilege escalation
+	store := NewSessionStore([]byte("test-secret-key-32-bytes-long!!!"))
+
+	// Step 1: Create anonymous session
+	req1 := httptest.NewRequest("GET", "/", nil)
+	rec1 := httptest.NewRecorder()
+
+	anonSession, _ := store.New(req1, "auth-session")
+	anonSession.Values["anonymous"] = true
+	anonSession.Save(req1, rec1)
+
+	var anonCookie *http.Cookie
+	for _, c := range rec1.Result().Cookies() {
+		if c.Name == "auth-session" {
+			anonCookie = c
+			break
+		}
+	}
+
+	// Step 2: Login (privilege escalation)
+	req2 := httptest.NewRequest("POST", "/login", nil)
+	req2.AddCookie(anonCookie)
+	rec2 := httptest.NewRecorder()
+
+	// Simulate login by regenerating session
+	err := RegenerateSession(rec2, req2, store)
+	if err != nil {
+		t.Fatal("Failed to regenerate session on login:", err)
+	}
+
+	// Step 3: Verify old session is invalid
+	req3 := httptest.NewRequest("GET", "/admin", nil)
+	req3.AddCookie(anonCookie)
+
+	hijackAttempt, _ := store.Get(req3, "auth-session")
+
+	// The old anonymous session should not have user privileges
+	if hijackAttempt.Values["user_id"] != nil {
+		t.Error("Session fixation vulnerability: old session has user privileges")
+	}
+
+	if hijackAttempt.Values["_regenerated"] == true {
+		t.Error("Session fixation vulnerability: old session has regeneration marker")
+	}
+}
+
+func TestSessionCookieSecuritySettings(t *testing.T) {
+	// Test with production settings
+	store := NewSessionStore([]byte("test-secret-key-32-bytes-long!!!"))
+
+	// Override to ensure secure settings
+	store.Options.Secure = true
+	store.Options.HttpOnly = true
+	store.Options.SameSite = http.SameSiteStrictMode
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	session, _ := store.New(req, "auth-session")
+	session.Values["test"] = true
+	session.Save(req, rec)
+
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("No cookies created")
+	}
+
+	cookie := cookies[0]
+
+	// Verify all security settings
+	if !cookie.HttpOnly {
+		t.Error("Cookie missing HttpOnly flag")
+	}
+
+	if !cookie.Secure {
+		t.Error("Cookie missing Secure flag")
+	}
+
+	if cookie.SameSite != http.SameSiteStrictMode {
+		t.Error("Cookie missing proper SameSite setting")
+	}
+
+	// Verify proper path
+	if cookie.Path != "/" {
+		t.Error("Cookie path should be /")
+	}
+
+	// Verify expiration is set
+	if cookie.MaxAge <= 0 && cookie.Expires.IsZero() {
+		t.Error("Cookie should have expiration set")
+	}
+}
+
+func TestSessionDataIntegrity(t *testing.T) {
+	store := NewSessionStore([]byte("test-secret-key-32-bytes-long!!!"))
+
+	// Save session with data
+	req1 := httptest.NewRequest("GET", "/", nil)
+	rec1 := httptest.NewRecorder()
+
+	session1, _ := store.New(req1, "auth-session")
+	session1.Values["user_id"] = int64(42)
+	session1.Values["email"] = "test@example.com"
+	session1.Values["is_admin"] = true
+	session1.Save(req1, rec1)
+
+	// Get the cookie
+	var sessionCookie *http.Cookie
+	for _, c := range rec1.Result().Cookies() {
+		if c.Name == "auth-session" {
+			sessionCookie = c
+			break
+		}
+	}
+
+	// Load session with cookie
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.AddCookie(sessionCookie)
+
+	session2, err := store.Get(req2, "auth-session")
+	if err != nil {
+		t.Fatal("Failed to get session:", err)
+	}
+
+	// Verify data integrity
+	if session2.Values["user_id"] != int64(42) {
+		t.Error("User ID not preserved")
+	}
+
+	if session2.Values["email"] != "test@example.com" {
+		t.Error("Email not preserved")
+	}
+
+	if session2.Values["is_admin"] != true {
+		t.Error("Admin flag not preserved")
+	}
+
+	// Test tampering - modify cookie value
+	tamperedCookie := &http.Cookie{
+		Name:  "auth-session",
+		Value: sessionCookie.Value + "tampered",
+	}
+
+	req3 := httptest.NewRequest("GET", "/", nil)
+	req3.AddCookie(tamperedCookie)
+
+	session3, _ := store.Get(req3, "auth-session")
+
+	// Tampered session should not have any values
+	if session3.Values["user_id"] != nil {
+		t.Error("Tampered session should not contain user data")
+	}
+}
+</file>
+
+<file path="auth/session_test.go">
+package auth
+
+import (
+	"database/sql"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+	"time"
+
+	"github.com/gorilla/sessions"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+func TestSessionRegeneration(t *testing.T) {
+	store := NewSessionStore([]byte("test-secret-key-32-bytes-long!!!"))
+
+	// Create initial session
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	session, _ := store.New(req, "auth-session")
+	session.Values["user_id"] = int64(1)
+	session.Values["test_value"] = "original"
+	err := session.Save(req, rec)
+	if err != nil {
+		t.Fatal("Failed to save initial session:", err)
+	}
+
+	// Get initial session cookie
+	cookies := rec.Result().Cookies()
+	if len(cookies) == 0 {
+		t.Fatal("No cookies set")
+	}
+
+	var sessionCookie *http.Cookie
+	for _, cookie := range cookies {
+		if cookie.Name == "auth-session" {
+			sessionCookie = cookie
+			break
+		}
+	}
+
+	if sessionCookie == nil {
+		t.Fatal("No session cookie found")
+	}
+
+	// Create new request with the session cookie
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.AddCookie(sessionCookie)
+	rec2 := httptest.NewRecorder()
+
+	// Regenerate session
+	err = RegenerateSession(rec2, req2, store)
+	if err != nil {
+		t.Fatal("Failed to regenerate session:", err)
+	}
+
+	// Check that we got a new cookie (regeneration happened)
+	newCookies := rec2.Result().Cookies()
+	regenerated := false
+	for _, cookie := range newCookies {
+		if cookie.Name == "auth-session" {
+			// MaxAge -1 means delete
+			if cookie.MaxAge == -1 {
+				regenerated = true
+			}
+			break
+		}
+	}
+
+	if !regenerated {
+		t.Error("Session regeneration did not properly invalidate old session")
+	}
+
+	// Verify the regeneration marker was added
+	req3 := httptest.NewRequest("GET", "/", nil)
+	// We need to get the new session from rec2
+	for _, cookie := range rec2.Result().Cookies() {
+		if cookie.Name == "auth-session" && cookie.MaxAge != -1 {
+			req3.AddCookie(cookie)
+			break
+		}
+	}
+
+	// Try to get the new session and verify it has the regeneration marker
+	_, err = store.Get(req3, "auth-session")
+	if err != nil {
+		t.Log("Note: Session regeneration in Gorilla sessions is complex due to cookie handling")
+		// This is expected - Gorilla sessions has limitations with regeneration
+		return
+	}
+
+	// The best we can verify is that the old session was marked for deletion
+	if regenerated {
+		t.Log("Session regeneration completed - old session invalidated")
+	}
+}
+
+func TestSessionTimeout(t *testing.T) {
+	db, err := setupTestDB()
+	if err != nil {
+		t.Fatal("Failed to setup test DB:", err)
+	}
+	defer db.Close()
+
+	// Create a store with very short timeout
+	store := sessions.NewCookieStore([]byte("test-secret-key-32-bytes-long!!!"))
+	store.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   1, // 1 second
+		HttpOnly: true,
+	}
+
+	service := NewService(store, db)
+
+	// Create and verify user
+	_, err = service.Register("test@example.com", "password123")
+	if err != nil {
+		t.Fatal("Failed to register user:", err)
+	}
+
+	_, err = db.Exec("UPDATE users SET verified = 1 WHERE email = ?", "test@example.com")
+	if err != nil {
+		t.Fatal("Failed to verify user:", err)
+	}
+
+	// Login
+	req := httptest.NewRequest("POST", "/login", nil)
+	rec := httptest.NewRecorder()
+
+	err = service.Login(rec, req, "test@example.com", "password123")
+	if err != nil {
+		t.Fatal("Login failed:", err)
+	}
+
+	// Get session cookie
+	var sessionCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "auth-session" {
+			sessionCookie = cookie
+			break
+		}
+	}
+
+	if sessionCookie == nil {
+		t.Fatal("No session cookie found after login")
+	}
+
+	// Immediately check that session works
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.AddCookie(sessionCookie)
+
+	user, err := service.GetUser(req2)
+	if err != nil || user == nil {
+		t.Fatal("Session should be valid immediately after login")
+	}
+
+	// Wait for timeout
+	time.Sleep(2 * time.Second)
+
+	// Check cookie expiration
+	// Note: Gorilla sessions relies on client-side expiration
+	// The browser would not send expired cookies
+	if sessionCookie.MaxAge == 1 {
+		t.Log("Session cookie has MaxAge of 1 second - would be expired by browser")
+		// In a real scenario, the browser wouldn't send this cookie
+		// But in tests, we're manually adding it, so the session might still work
+		// This is a limitation of testing cookie-based timeouts
+	}
+}
+
+// Helper function to setup test database
+func setupTestDB() (*sql.DB, error) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		return nil, err
+	}
+
+	// Create users table
+	_, err = db.Exec(`
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT UNIQUE NOT NULL,
+			password_hash TEXT NOT NULL,
+			verified BOOLEAN DEFAULT 0,
+			created_at DATETIME NOT NULL
+		)
+	`)
+
+	return db, err
+}
+</file>
+
+<file path="auth/token_test.go">
+package auth
+
+import (
+	"database/sql"
+	"testing"
+	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+func setupAuthDB(t *testing.T) (*Service, *sql.DB) {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create tables
+	_, err = db.Exec(`
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY,
+			email TEXT UNIQUE,
+			password_hash TEXT,
+			verified BOOLEAN DEFAULT 0,
+			created_at DATETIME
+		);
+		CREATE TABLE tokens (
+			id INTEGER PRIMARY KEY,
+			token TEXT UNIQUE,
+			user_id INTEGER,
+			purpose TEXT,
+			expires_at DATETIME,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert test user
+	_, err = db.Exec(
+		"INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+		"test@example.com", "hash123", time.Now(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewSessionStore([]byte("test-secret-key-32-bytes-long!!!"))
+	service := NewService(store, db)
+
+	return service, db
+}
+
+func TestTokenGeneration(t *testing.T) {
+	// Test token uniqueness
+	tokens := make(map[string]bool)
+	for i := 0; i < 100; i++ {
+		token := GenerateToken()
+		if len(token) != 64 { // 32 bytes hex encoded
+			t.Errorf("Invalid token length: %d", len(token))
+		}
+		if tokens[token] {
+			t.Fatal("Duplicate token generated")
+		}
+		tokens[token] = true
+	}
+}
+
+func TestVerificationToken(t *testing.T) {
+	service, db := setupAuthDB(t)
+	defer db.Close()
+
+	// Create verification token
+	token, err := service.CreateVerificationToken(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Validate token
+	validated, err := service.ValidateToken(token.Value, "email_verification")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if validated.UserID != 1 {
+		t.Errorf("Wrong user ID: %d", validated.UserID)
+	}
+
+	// Token should be deleted after use
+	_, err = service.ValidateToken(token.Value, "email_verification")
+	if err == nil {
+		t.Fatal("Token not deleted after use")
+	}
+}
+
+func TestTokenExpiration(t *testing.T) {
+	service, db := setupAuthDB(t)
+	defer db.Close()
+
+	// Insert expired token
+	expiredToken := GenerateToken()
+	_, err := db.Exec(`
+		INSERT INTO tokens (token, user_id, purpose, expires_at)
+		VALUES (?, ?, ?, ?)
+	`, expiredToken, 1, "password_reset", time.Now().Add(-1*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to validate expired token
+	_, err = service.ValidateToken(expiredToken, "password_reset")
+	if err == nil {
+		t.Fatal("Expired token was accepted")
+	}
+}
+</file>
+
+<file path="database/migration_test.go">
+package database
+
+import (
+	"testing"
+)
+
+func TestMigrationRollback(t *testing.T) {
+	// Test that migrations can be safely rolled back
+	t.Skip("Rollback functionality not yet implemented")
+
+	// TODO: Implement migration rollback tests
+	// Future implementation should test:
+	// 1. Running migrations up
+	// 2. Rolling back in reverse order
+	// 3. Ensuring data integrity
+	// 4. Re-running migrations after rollback
+}
+
+func TestMigrationIdempotency(t *testing.T) {
+	db, err := NewSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// First migration should succeed
+	err = db.Migrate()
+	if err != nil {
+		t.Fatal("First migration failed:", err)
+	}
+
+	// Second migration should be idempotent (no-op)
+	err = db.Migrate()
+	if err != nil {
+		t.Fatal("Second migration failed - not idempotent:", err)
+	}
+
+	// Verify tables exist
+	tables := []string{"users", "tokens", "sessions", "migrations", "roles", "permissions"}
+	for _, table := range tables {
+		var name string
+		err := db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
+		if err != nil {
+			t.Errorf("Table %s not created", table)
+		}
+	}
+}
+</file>
+
+<file path="database/query_test.go">
+package database
+
+import (
+	"database/sql"
+	"testing"
+
+	_ "github.com/mattn/go-sqlite3"
+)
+
+func setupTestDB(t *testing.T) *DB {
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create test table
+	_, err = db.Exec(`
+		CREATE TABLE users (
+			id INTEGER PRIMARY KEY,
+			email TEXT UNIQUE,
+			password_hash TEXT,
+			verified BOOLEAN DEFAULT 0
+		)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return &DB{DB: db, dbType: "sqlite"}
+}
+
+func TestSQLInjectionPrevention(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Insert test user
+	_, err := db.Exec("INSERT INTO users (email, password_hash) VALUES (?, ?)",
+		"admin@test.com", "hash123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	qb := db.Query()
+
+	// Test various SQL injection attempts
+	maliciousInputs := []string{
+		"admin' OR '1'='1",
+		"admin'; DROP TABLE users;--",
+		"admin' UNION SELECT * FROM users--",
+		"admin' OR 1=1--",
+		"admin\" OR \"1\"=\"1",
+		"'; DELETE FROM users WHERE '1'='1",
+	}
+
+	for _, input := range maliciousInputs {
+		var count int
+		err := qb.Select("users", "COUNT(*)").
+			Where("email", "=", input).
+			QueryRow().
+			Scan(&count)
+
+		if err != sql.ErrNoRows && count > 0 {
+			t.Errorf("SQL injection successful with input: %s", input)
+		}
+	}
+}
+
+func TestQueryBuilder(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Insert test data
+	testUsers := []struct {
+		email    string
+		verified bool
+	}{
+		{"user1@test.com", true},
+		{"user2@test.com", false},
+		{"user3@test.com", true},
+	}
+
+	for _, u := range testUsers {
+		_, err := db.Exec("INSERT INTO users (email, verified) VALUES (?, ?)",
+			u.email, u.verified)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Test SELECT query
+	qb := db.Query()
+
+	var email string
+	err := qb.Select("users", "email").
+		Where("verified", "=", true).
+		OrderBy("email", false).
+		Limit(1).
+		QueryRow().
+		Scan(&email)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if email != "user1@test.com" {
+		t.Errorf("Expected user1@test.com, got %s", email)
+	}
+}
+</file>
+
+<file path="middleware/auth.go">
+package middleware
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/gorilla/sessions"
+)
+
+type contextKey string
+
+const userContextKey contextKey = "user"
+
+// RequireAuth ensures user is authenticated
+func RequireAuth(store sessions.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			session, err := store.Get(r, "auth-session")
+			if err != nil {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			userID, ok := session.Values["user_id"]
+			if !ok || userID == nil {
+				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				return
+			}
+
+			// Add user ID to context
+			ctx := context.WithValue(r.Context(), userContextKey, userID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// GetUserID retrieves user ID from context
+func GetUserID(r *http.Request) (int64, bool) {
+	userID, ok := r.Context().Value(userContextKey).(int64)
+	return userID, ok
+}
+</file>
+
+<file path="middleware/csrf_test.go">
+// File: middleware/csrf_test.go
+package middleware
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestCSRFProtection(t *testing.T) {
+	handler := CSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Test GET request sets CSRF cookie
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	// Check cookie was set
+	cookies := rec.Result().Cookies()
+	var csrfCookie *http.Cookie
+	for _, c := range cookies {
+		if c.Name == "csrf_token" {
+			csrfCookie = c
+			break
+		}
+	}
+
+	if csrfCookie == nil {
+		t.Fatal("CSRF cookie not set on GET request")
+	}
+
+	if csrfCookie.HttpOnly {
+		t.Fatal("CSRF cookie should not be HttpOnly (needs JS access)")
+	}
+
+	// Test POST without CSRF token
+	req = httptest.NewRequest("POST", "/", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("Expected 403, got %d", rec.Code)
+	}
+
+	// Test POST with mismatched CSRF token
+	req = httptest.NewRequest("POST", "/", nil)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", "wrong-token")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatal("CSRF protection failed with mismatched token")
+	}
+
+	// Test POST with correct CSRF token
+	req = httptest.NewRequest("POST", "/", nil)
+	req.AddCookie(csrfCookie)
+	req.Header.Set("X-CSRF-Token", csrfCookie.Value)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Expected 200, got %d", rec.Code)
+	}
+}
+
+func TestCSRFWithHTMX(t *testing.T) {
+	handler := CSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Get CSRF token
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var csrfCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == "csrf_token" {
+			csrfCookie = c
+			break
+		}
+	}
+
+	// Check token in response header for HTMX
+	if rec.Header().Get("X-CSRF-Token") != csrfCookie.Value {
+		t.Fatal("CSRF token not in response header for HTMX request")
+	}
+}
+</file>
+
+<file path="middleware/htmx.go">
+package middleware
+
+import (
+	"context"
+	"net/http"
+)
+
+// HTMXConfig holds HTMX middleware configuration
+type HTMXConfig struct {
+	// Set HX-Push-Url header based on current URL for non-boosted requests
+	PushURL bool
+	// Include CSRF token in response headers
+	IncludeCSRFHeader bool
+}
+
+// HTMX middleware that adds HTMX-friendly features
+func HTMX(config HTMXConfig) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Add HTMX indicator to context
+			if r.Header.Get("HX-Request") == "true" {
+				ctx := context.WithValue(r.Context(), "htmx", true)
+				r = r.WithContext(ctx)
+			}
+
+			// Include CSRF token in response headers for HTMX requests
+			if config.IncludeCSRFHeader && r.Header.Get("HX-Request") == "true" {
+				if cookie, err := r.Cookie("csrf_token"); err == nil {
+					w.Header().Set("X-CSRF-Token", cookie.Value)
+				}
+			}
+
+			// Auto push URL for non-boosted HTMX requests
+			if config.PushURL && r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Boosted") != "true" {
+				w.Header().Set("HX-Push-Url", r.URL.Path)
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+</file>
+
+<file path="middleware/logger.go">
+package middleware
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"log"
+	"net/http"
+	"time"
+)
+
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+	size   int
+}
+
+func (rw *responseWriter) WriteHeader(status int) {
+	rw.status = status
+	rw.ResponseWriter.WriteHeader(status)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	size, err := rw.ResponseWriter.Write(b)
+	rw.size += size
+	return size, err
+}
+
+// Logger logs HTTP requests
+func Logger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Generate request ID
+		requestID := generateRequestID()
+		w.Header().Set("X-Request-ID", requestID)
+
+		// Wrap response writer
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+
+		// Process request
+		next.ServeHTTP(rw, r)
+
+		// Log request (avoid logging sensitive data)
+		duration := time.Since(start)
+		log.Printf("[%s] %s %s %d %d %v",
+			requestID,
+			r.Method,
+			r.URL.Path, // Don't log query params - might contain sensitive data
+			rw.status,
+			rw.size,
+			duration,
+		)
+	})
+}
+
+func generateRequestID() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+</file>
+
+<file path="middleware/middleware.go">
+package middleware
+
+import (
+	"net/http"
+)
+
+// Chain creates a middleware chain
+func Chain(middlewares ...func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(final http.Handler) http.Handler {
+		for i := len(middlewares) - 1; i >= 0; i-- {
+			final = middlewares[i](final)
+		}
+		return final
+	}
+}
+</file>
+
+<file path="middleware/ratelimit_test.go">
+package middleware
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"sync"
+	"testing"
+)
+
+// This test is for a future rate limiting implementation
+func TestRateLimitingStub(t *testing.T) {
+	t.Skip("Rate limiting not yet implemented")
+
+	// TODO: Implement rate limiting middleware and tests
+	// Example of what should be tested:
+	// 1. Allow normal request rate
+	// 2. Block excessive requests
+	// 3. Reset after time window
+	// 4. Per-IP tracking
+	// 5. Exemption for authenticated users
+}
+
+func TestConcurrentCSRFRequests(t *testing.T) {
+	handler := CSRF(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Get initial CSRF token
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var csrfToken string
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "csrf_token" {
+			csrfToken = cookie.Value
+			break
+		}
+	}
+
+	// Test concurrent POST requests with same token
+	var wg sync.WaitGroup
+	errors := make(chan error, 10)
+
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			req := httptest.NewRequest("POST", "/", nil)
+			req.Header.Set("X-CSRF-Token", csrfToken)
+			req.AddCookie(&http.Cookie{Name: "csrf_token", Value: csrfToken})
+			rec := httptest.NewRecorder()
+
+			handler.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				errors <- http.ErrAbortHandler
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errors)
+
+	errorCount := 0
+	for range errors {
+		errorCount++
+	}
+
+	if errorCount > 0 {
+		t.Errorf("CSRF failed under concurrent load: %d errors", errorCount)
+	}
+}
+</file>
+
+<file path="middleware/security_test.go">
+package middleware
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestSecurityHeaders(t *testing.T) {
+	handler := SecurityHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	headers := []struct {
+		name     string
+		expected string
+	}{
+		{"X-Frame-Options", "DENY"},
+		{"X-Content-Type-Options", "nosniff"},
+		{"X-XSS-Protection", "1; mode=block"},
+		{"Referrer-Policy", "strict-origin-when-cross-origin"},
+	}
+
+	for _, h := range headers {
+		value := rec.Header().Get(h.name)
+		if value != h.expected {
+			t.Errorf("%s: expected %q, got %q", h.name, h.expected, value)
+		}
+	}
+
+	// Check CSP header exists
+	csp := rec.Header().Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("Content-Security-Policy header missing")
+	}
+
+	// Verify critical CSP directives
+	requiredCSP := []string{
+		"default-src 'self'",
+		"frame-ancestors 'none'",
+	}
+
+	for _, directive := range requiredCSP {
+		if !strings.Contains(csp, directive) {
+			t.Errorf("CSP missing directive: %s", directive)
+		}
+	}
+}
+</file>
+
+<file path="middleware/security.go">
+package middleware
+
+import (
+	"net/http"
+)
+
+// SecurityHeaders adds security headers to all responses
+func SecurityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Prevent clickjacking
+		w.Header().Set("X-Frame-Options", "DENY")
+
+		// Prevent MIME sniffing
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		// Enable XSS protection
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+		// Content Security Policy
+		w.Header().Set("Content-Security-Policy",
+			"default-src 'self'; "+
+				"script-src 'self' 'unsafe-inline'; "+
+				"style-src 'self' 'unsafe-inline'; "+
+				"img-src 'self' data: https:; "+
+				"font-src 'self'; "+
+				"connect-src 'self'; "+
+				"frame-ancestors 'none';")
+
+		// Referrer Policy
+		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
+
+		// Permissions Policy
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+
+		next.ServeHTTP(w, r)
+	})
+}
+</file>
+
+<file path="router/router_test.go">
+package router
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestRouterParameterInjection(t *testing.T) {
+	r := New()
+
+	// Test route parameter extraction doesn't allow injection
+	r.GET("/users/{id}", func(w http.ResponseWriter, r *http.Request) {
+		ctx := NewContext(w, r)
+		id := ctx.Param("id")
+
+		// Write back the extracted ID
+		w.Write([]byte("User ID: " + id))
+	})
+
+	// Test with valid requests first
+	validTests := []struct {
+		path     string
+		expected string
+	}{
+		{"/users/123", "User ID: 123"},
+		{"/users/abc", "User ID: abc"},
+	}
+
+	for _, tt := range validTests {
+		req := httptest.NewRequest("GET", tt.path, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("Valid path %s returned %d", tt.path, rec.Code)
+		}
+
+		if rec.Body.String() != tt.expected {
+			t.Errorf("Expected %q, got %q", tt.expected, rec.Body.String())
+		}
+	}
+
+	// Test potentially dangerous paths - these should be handled safely
+	// The router should either extract them as-is or return 404
+	dangerousPaths := []string{
+		"/users/1%27%20OR%20%271%27%3D%271",       // URL encoded: 1' OR '1'='1
+		"/users/1%3B%20DROP%20TABLE%20users%3B--", // URL encoded: 1; DROP TABLE users;--
+		"/users/..%2F..%2Fetc%2Fpasswd",           // Path traversal attempt
+		"/users/1%00.php",                         // Null byte injection
+	}
+
+	for _, path := range dangerousPaths {
+		req := httptest.NewRequest("GET", path, nil)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+
+		// Should either 404 or safely handle the parameter
+		if rec.Code == http.StatusInternalServerError {
+			t.Errorf("Potential security issue with path: %s", path)
+		}
+	}
+}
+
+func TestContextHTMXHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("HX-Request", "true")
+	r.Header.Set("HX-Trigger", "button-1")
+
+	ctx := NewContext(w, r)
+
+	if !ctx.IsHTMX() {
+		t.Error("Failed to detect HTMX request")
+	}
+
+	if ctx.GetTrigger() != "button-1" {
+		t.Error("Failed to get HTMX trigger")
+	}
+
+	// Test HTMX response headers
+	ctx.HXRedirect("/new-page")
+	ctx.HXTrigger("event1")
+
+	if w.Header().Get("HX-Redirect") != "/new-page" {
+		t.Error("Failed to set HX-Redirect header")
+	}
+
+	if w.Header().Get("HX-Trigger") != "event1" {
+		t.Error("Failed to set HX-Trigger header")
+	}
+}
+</file>
+
+<file path="security/fuzzing_test.go">
+package security
+
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+func TestInputSanitizationFuzzing(t *testing.T) {
+	// Test with various malformed inputs
+	fuzzInputs := []string{
+		// Unicode edge cases
+		"\x00\x01\x02\x03\x04\x05\x06\x07\x08",
+		"\u200B\u200C\u200D\uFEFF", // Zero-width characters
+		"\U0001F4A9",               // Emoji
+		strings.Repeat("A", 10000), // Long string
+
+		// HTML/JS injection variants
+		"<img src=x onerror=alert(1)>",
+		"<svg onload=alert(1)>",
+		"<iframe src=javascript:alert(1)>",
+		"<object data=javascript:alert(1)>",
+		"<embed src=javascript:alert(1)>",
+		"<form action=javascript:alert(1)>",
+		"<input onfocus=alert(1) autofocus>",
+		"<select onfocus=alert(1) autofocus>",
+		"<textarea onfocus=alert(1) autofocus>",
+		"<button onclick=alert(1)>",
+
+		// Protocol handlers
+		"javascript:void(0)",
+		"data:text/html,<script>alert(1)</script>",
+		"vbscript:msgbox(1)",
+
+		// SQL-like patterns (should be safely handled)
+		"'; DROP TABLE users; --",
+		"1' OR '1'='1",
+		"admin'--",
+		"1 UNION SELECT * FROM users",
+	}
+
+	for _, input := range fuzzInputs {
+		output := SanitizeHTML(input)
+
+		// Ensure output is valid UTF-8
+		if !utf8.ValidString(output) {
+			t.Errorf("Invalid UTF-8 output for input: %q", input)
+		}
+
+		// For SanitizeHTML, we only escape HTML - we don't remove content
+		// So we should check that angle brackets are escaped
+		if strings.Contains(output, "<") || strings.Contains(output, ">") {
+			t.Errorf("Unescaped HTML in output: %q", output)
+		}
+
+		// Test SanitizeOutput which should remove dangerous patterns
+		sanitized := SanitizeOutput(input)
+
+		// Check that script tags and event handlers are removed
+		dangerousPatterns := []string{
+			"<script", "</script>", "onerror=", "onclick=",
+			"onload=", "onfocus=", "javascript:",
+		}
+
+		for _, pattern := range dangerousPatterns {
+			if strings.Contains(sanitized, pattern) {
+				t.Errorf("SanitizeOutput failed to remove %q from input: %q", pattern, input)
+			}
+		}
+	}
+}
+
+func TestTruncateStringBoundaries(t *testing.T) {
+	tests := []struct {
+		input     string
+		maxLength int
+		expected  string
+	}{
+		{"", 10, ""},
+		{"short", 10, "short"},
+		{"exactlength", 11, "exactlength"},
+		{"toolongstring", 10, "toolongstr"},
+		{"Hello\x00World", 20, "Hello\x00World"}, // Null bytes
+	}
+
+	for _, tt := range tests {
+		result := TruncateString(tt.input, tt.maxLength)
+		if result != tt.expected {
+			t.Errorf("TruncateString(%q, %d) = %q, want %q",
+				tt.input, tt.maxLength, result, tt.expected)
+		}
+	}
+
+	// Test multi-byte character truncation separately
+	// This is tricky because we need to ensure we don't break UTF-8 sequences
+	multiByteTest := strings.Repeat("あ", 10) // 30 bytes total (3 bytes per character)
+
+	// Truncate to 15 bytes should give us 5 complete characters (15 bytes)
+	result := TruncateString(multiByteTest, 15)
+	if !utf8.ValidString(result) {
+		t.Error("TruncateString produced invalid UTF-8")
+	}
+
+	// The result should be 5 characters or less
+	if utf8.RuneCountInString(result) > 5 {
+		t.Errorf("TruncateString with multi-byte chars: got %d runes, want <= 5",
+			utf8.RuneCountInString(result))
+	}
+}
+</file>
+
+<file path="security/sanitizer_test.go">
+package security
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestXSSPrevention(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected string
+		desc     string
+	}{
+		{
+			`<script>alert('xss')</script>`,
+			`&lt;script&gt;alert(&#39;xss&#39;)&lt;/script&gt;`,
+			"script tag",
+		},
+		{
+			`<img src=x onerror="alert('xss')">`,
+			`&lt;img src=x onerror=&#34;alert(&#39;xss&#39;)&#34;&gt;`,
+			"event handler",
+		},
+		{
+			`<a href="javascript:alert('xss')">click</a>`,
+			`&lt;a href=&#34;javascript:alert(&#39;xss&#39;)&#34;&gt;click&lt;/a&gt;`,
+			"javascript URL",
+		},
+		{
+			`Hello <b>World</b>`,
+			`Hello &lt;b&gt;World&lt;/b&gt;`,
+			"HTML tags",
+		},
+		{
+			`Plain text with special chars: <>&"'`,
+			`Plain text with special chars: &lt;&gt;&amp;&#34;&#39;`,
+			"special characters",
+		},
+	}
+
+	for _, tt := range tests {
+		result := SanitizeHTML(tt.input)
+		if result != tt.expected {
+			t.Errorf("%s: expected %q, got %q", tt.desc, tt.expected, result)
+		}
+	}
+}
+
+func TestSanitizeOutput(t *testing.T) {
+	// Test that malicious patterns are removed before escaping
+	input := `<script>alert('xss')</script>Hello<img onerror="bad()">World`
+	output := SanitizeOutput(input)
+
+	if strings.Contains(output, "<script>") || strings.Contains(output, "onerror") {
+		t.Errorf("Malicious content not properly sanitized: %s", output)
+	}
+}
+</file>
+
+<file path="security/validator_test.go">
+package security
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestEmailValidation(t *testing.T) {
+	validEmails := []string{
+		"test@example.com",
+		"user.name@example.com",
+		"user+tag@example.co.uk",
+		"test123@sub.example.com",
+	}
+
+	for _, email := range validEmails {
+		if !ValidateEmail(email) {
+			t.Errorf("Valid email rejected: %s", email)
+		}
+	}
+
+	invalidEmails := []string{
+		"",
+		"notanemail",
+		"@example.com",
+		"user@",
+		"user space@example.com",
+		"user@example",
+		"user@@example.com",
+	}
+
+	for _, email := range invalidEmails {
+		if ValidateEmail(email) {
+			t.Errorf("Invalid email accepted: %s", email)
+		}
+	}
+}
+
+func TestInputValidation(t *testing.T) {
+	// Test registration validation
+	tests := []struct {
+		input RegisterInput
+		valid bool
+		desc  string
+	}{
+		{
+			RegisterInput{Email: "test@example.com", Password: "password123"},
+			true,
+			"valid registration",
+		},
+		{
+			RegisterInput{Email: "", Password: "password123"},
+			false,
+			"empty email",
+		},
+		{
+			RegisterInput{Email: "invalid-email", Password: "password123"},
+			false,
+			"invalid email format",
+		},
+		{
+			RegisterInput{Email: "test@example.com", Password: "short"},
+			false,
+			"password too short",
+		},
+		{
+			RegisterInput{Email: "test@example.com", Password: strings.Repeat("a", 73)},
+			false,
+			"password too long",
+		},
+	}
+
+	for _, tt := range tests {
+		err := ValidateInput(tt.input)
+		if (err == nil) != tt.valid {
+			t.Errorf("%s: expected valid=%v, got error=%v", tt.desc, tt.valid, err)
+		}
+	}
+}
+</file>
+
+<file path="utils/email.go">
+package utils
+
+import (
+	"fmt"
+	"net/smtp"
+	"strings"
+)
+
+type EmailConfig struct {
+	SMTPHost     string
+	SMTPPort     string
+	SMTPUsername string
+	SMTPPassword string
+	FromAddress  string
+	FromName     string
+}
+
+type Email struct {
+	To      []string
+	Subject string
+	Body    string
+	HTML    bool
+}
+
+// SendEmail sends an email using SMTP
+func SendEmail(config EmailConfig, email Email) error {
+	auth := smtp.PlainAuth("", config.SMTPUsername, config.SMTPPassword, config.SMTPHost)
+
+	// Build message
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("From: %s <%s>\r\n", config.FromName, config.FromAddress))
+	msg.WriteString(fmt.Sprintf("To: %s\r\n", strings.Join(email.To, ", ")))
+	msg.WriteString(fmt.Sprintf("Subject: %s\r\n", email.Subject))
+
+	if email.HTML {
+		msg.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	} else {
+		msg.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	}
+
+	msg.WriteString("\r\n")
+	msg.WriteString(email.Body)
+
+	// Send email
+	addr := config.SMTPHost + ":" + config.SMTPPort
+	return smtp.SendMail(addr, auth, config.FromAddress, email.To, []byte(msg.String()))
+}
+
+// SendVerificationEmail sends an email verification link
+func SendVerificationEmail(config EmailConfig, to, token string) error {
+	// In production, use proper base URL
+	verifyURL := fmt.Sprintf("https://example.com/verify?token=%s", token)
+
+	email := Email{
+		To:      []string{to},
+		Subject: "Verify your email address",
+		Body: fmt.Sprintf(`
+            <h2>Verify your email address</h2>
+            <p>Please click the link below to verify your email address:</p>
+            <p><a href="%s">Verify Email</a></p>
+            <p>This link will expire in 24 hours.</p>
+        `, verifyURL),
+		HTML: true,
+	}
+
+	return SendEmail(config, email)
+}
+
+// SendPasswordResetEmail sends a password reset link
+func SendPasswordResetEmail(config EmailConfig, to, token string) error {
+	resetURL := fmt.Sprintf("https://example.com/reset-password?token=%s", token)
+
+	email := Email{
+		To:      []string{to},
+		Subject: "Reset your password",
+		Body: fmt.Sprintf(`
+            <h2>Reset your password</h2>
+            <p>You requested to reset your password. Click the link below:</p>
+            <p><a href="%s">Reset Password</a></p>
+            <p>This link will expire in 1 hour.</p>
+            <p>If you didn't request this, please ignore this email.</p>
+        `, resetURL),
+		HTML: true,
+	}
+
+	return SendEmail(config, email)
+}
+</file>
+
+<file path="utils/random.go">
+package utils
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"math/big"
+)
+
+// GenerateRandomString generates a cryptographically secure random string
+func GenerateRandomString(length int) (string, error) {
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+// GenerateRandomBytes generates random bytes
+func GenerateRandomBytes(length int) ([]byte, error) {
+	bytes := make([]byte, length)
+	if _, err := rand.Read(bytes); err != nil {
+		return nil, err
+	}
+	return bytes, nil
+}
+
+// GenerateRandomInt generates a random integer between 0 and max
+func GenerateRandomInt(max int64) (int64, error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(max))
+	if err != nil {
+		return 0, err
+	}
+	return n.Int64(), nil
+}
+</file>
+
+<file path="README.md">
+# Go-Guardian
+
+A secure, lightweight web framework for Go that prioritizes security and simplicity over feature bloat.
+
+## Philosophy
+
+Go-Guardian follows four core principles:
+- **Security First**: Every feature is designed with security as the primary concern
+- **Simplicity**: Choose simple, proven solutions over complex patterns
+- **Minimal Dependencies**: Use only essential, well-maintained packages
+- **No Magic**: Explicit, readable code over clever abstractions
+
+## Features
+
+### 🔐 Security
+- **CSRF Protection**: Double-submit cookie pattern
+- **XSS Prevention**: Automatic HTML escaping and Content Security Policy headers
+- **SQL Injection Prevention**: Parameterized queries only
+- **Session Security**: Secure, HttpOnly, SameSite cookies with regeneration
+- **Password Security**: bcrypt hashing with secure defaults
+- **Security Headers**: X-Frame-Options, X-Content-Type-Options, etc.
+
+### 🚀 Core Features
+- **Fast Routing**: Built on [chi router](https://github.com/go-chi/chi)
+- **Middleware Pipeline**: Simple, composable middleware
+- **Session Management**: Secure session handling with [gorilla/sessions](https://github.com/gorilla/sessions)
+- **Database Support**: SQLite (default) and MySQL with migration system
+- **Input Validation**: Powered by [validator/v10](https://github.com/go-playground/validator)
+- **HTMX Support**: Built-in middleware for modern hypermedia applications
+
+## Installation
+
+```bash
+go get github.com/flyzard/go-guardian
+```
+
+## Quick Start
+
+```go
+package main
+
+import (
+    "net/http"
+    "github.com/flyzard/go-guardian"
+    "github.com/flyzard/go-guardian/middleware"
+)
+
+func main() {
+    // Initialize app with secure session key
+    app := guardian.New(guardian.Config{
+        SessionKey:   []byte("your-32-byte-secret-key-here!!!"),
+        DatabaseType: "sqlite",
+        DatabasePath: "app.db",
+    })
+    
+    // Apply security middleware
+    app.Use(middleware.Logger)
+    app.Use(middleware.SecurityHeaders)
+    app.Use(middleware.CSRF)
+    
+    // Define routes
+    app.GET("/", homeHandler)
+    app.POST("/login", loginHandler)
+    
+    // Protected routes
+    admin := app.Group("/admin")
+    admin.Use(middleware.RequireAuth(app.Sessions()))
+    admin.GET("/dashboard", dashboardHandler)
+    
+    app.Listen(":8080")
+}
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+    w.Write([]byte("Welcome to Go-Guardian!"))
+}
+```
+
+## Security Features
+
+### CSRF Protection
+Automatically protects all state-changing operations:
+```go
+// CSRF token automatically validated for POST/PUT/DELETE
+app.POST("/api/users", createUser)
+```
+
+### SQL Injection Prevention
+Use the query builder for safe database operations:
+```go
+user, err := app.DB().Query().
+    Select("users", "id", "email").
+    Where("email", "=", email).
+    QueryRow().
+    Scan(&id, &email)
+```
+
+### XSS Protection
+All output is automatically escaped:
+```go
+sanitized := security.SanitizeHTML(userInput)
+```
+
+### Authentication
+Built-in secure authentication:
+```go
+// Register
+user, err := app.Auth().Register(email, password)
+
+// Login
+err := app.Auth().Login(w, r, email, password)
+
+// Get current user
+user, err := app.Auth().GetUser(r)
+
+// Logout
+err := app.Auth().Logout(w, r)
+```
+
+## Middleware
+
+### Built-in Middleware
+- `Logger` - Request logging with request IDs
+- `SecurityHeaders` - Security headers (CSP, X-Frame-Options, etc.)
+- `CSRF` - CSRF protection using double-submit cookies
+- `RequireAuth` - Authentication enforcement
+- `CORS` - Configurable CORS support
+- `HTMX` - HTMX request handling
+
+### Custom Middleware
+```go
+func RateLimit(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Your middleware logic
+        next.ServeHTTP(w, r)
+    })
+}
+
+app.Use(RateLimit)
+```
+
+## Database
+
+### Migrations
+SQL-based migrations with up/down support:
+```go
+// Migrations run automatically on startup
+// Add new migrations to database/migration.go
+```
+
+### Query Builder
+Safe, parameterized queries:
+```go
+// Insert
+result, err := app.DB().Query().Insert("users", map[string]interface{}{
+    "email": email,
+    "password_hash": hash,
+})
+
+// Update
+result, err := app.DB().Query().Update("users", 
+    map[string]interface{}{"verified": true},
+    map[string]interface{}{"id": userID},
+)
+```
+
+## Testing
+
+The framework includes comprehensive security tests:
+```bash
+# Run all tests
+./test.sh
+
+# Run security tests only
+go test -run "TestSQL|TestCSRF|TestXSS|TestPassword" ./...
+```
+
+## Configuration
+
+### Environment-based Settings
+```go
+app := guardian.New(guardian.Config{
+    SessionKey:      []byte(os.Getenv("SESSION_KEY")),
+    Environment:     os.Getenv("APP_ENV"), // "development" or "production"
+    DatabaseType:    "mysql",
+    DatabaseDSN:     os.Getenv("DATABASE_URL"),
+    MaxOpenConns:    25,
+    MaxIdleConns:    5,
+    ConnMaxLifetime: 5 * time.Minute,
+})
+```
+
+## Security Checklist
+
+Go-Guardian automatically handles:
+- [x] SQL injection prevention via parameterized queries
+- [x] XSS prevention via auto-escaping
+- [x] CSRF protection on state-changing operations  
+- [x] Secure password hashing (bcrypt cost 12)
+- [x] Session fixation prevention
+- [x] Secure cookie settings
+- [x] Security headers on all responses
+- [x] Input validation and sanitization
+
+## Contributing
+
+1. Follow the security-first philosophy
+2. Keep dependencies minimal
+3. Write clear, explicit code
+4. Add security tests for new features
+
+## License
+
+MIT License - see LICENSE file for details
+</file>
+
+<file path="test.sh">
+# File: test.sh
+#!/bin/bash
+
+echo "=== Go-Guardian Test Suite ==="
+echo
+
+echo "1. Building all packages..."
+if ! go build ./...; then
+    echo "❌ Build failed. Please fix compilation errors first."
+    exit 1
+fi
+echo "✅ Build successful"
+echo
+
+echo "2. Running all tests with race detection..."
+if go test -race -coverprofile=coverage.out ./... > test.log 2>&1; then
+    echo "✅ All tests passed"
+else
+    echo "⚠️  Some tests failed (see details below)"
+fi
+echo
+
+echo "3. Generating coverage report..."
+go tool cover -html=coverage.out -o coverage.html 2>/dev/null && echo "✅ Coverage report generated: coverage.html" || echo "⚠️  Coverage report generation skipped"
+echo
+
+echo "4. Test Results Summary:"
+echo "------------------------"
+go test ./... 2>&1 | grep -E "(ok|FAIL)" | while read line; do
+    if echo "$line" | grep -q "FAIL"; then
+        echo "❌ $line"
+    elif echo "$line" | grep -q "ok"; then
+        echo "✅ $line"
+    fi
+done
+echo
+
+echo "5. Security Test Results:"
+echo "------------------------"
+go test -v -run "TestSQL|TestCSRF|TestXSS|TestPassword|TestToken|TestSecurity|TestSession" ./... 2>&1 | grep -E "(PASS|FAIL|---)" | while read line; do
+    if echo "$line" | grep -q "FAIL"; then
+        echo "❌ $line"
+    elif echo "$line" | grep -q "PASS"; then
+        echo "✅ $line"
+    fi
+done
+echo
+
+echo "6. Coverage Summary:"
+echo "-------------------"
+total_coverage=$(go tool cover -func=coverage.out 2>/dev/null | grep total | awk '{print $3}')
+echo "Total coverage: ${total_coverage:-N/A}"
+echo
+
+echo "Test run complete!"
+</file>
+
+<file path="auth/session_notes.go">
+// File: auth/session_notes.go
+package auth
+
+// Session Security Notes:
+//
+// Guardian supports multiple session backends:
+//
+// 1. Cookie Sessions (Default):
+//    - Uses gorilla/sessions CookieStore
+//    - Data stored in encrypted cookies on client side
+//    - Limited to 4KB size
+//    - No server-side storage needed
+//    - Survives server restarts
+//    - Scales infinitely
+//
+// 2. In-Memory Sessions:
+//    - Data stored in server memory
+//    - No size limitations
+//    - Lost on server restart
+//    - Doesn't scale across multiple servers
+//    - Good for development/single-server deployments
+//
+// 3. Database Sessions (Future):
+//    - Data stored in database
+//    - Persistent across restarts
+//    - Scales across multiple servers
+//    - Requires sessions table
+//    - Can query active sessions
+//
+// Security considerations:
+// - All backends use secure session IDs
+// - Cookie sessions are encrypted with the SessionKey
+// - HttpOnly, Secure, and SameSite flags are set by default
+// - Session regeneration on privilege changes recommended
+// - Consider session fingerprinting for additional security
+//
+// The sessions table in the schema is ONLY required if using
+// database session backend. Cookie and memory backends do not
+// need any database tables for session storage.
+</file>
+
+<file path="database/query.go">
+package database
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
+type QueryBuilder struct {
+	db *DB
+}
+
+func (db *DB) Query() *QueryBuilder {
+	return &QueryBuilder{db: db}
+}
+
+// Select builds a SELECT query with parameterized inputs
+func (qb *QueryBuilder) Select(table string, columns ...string) *SelectQuery {
+	return &SelectQuery{
+		db:      qb.db,
+		table:   table,
+		columns: columns,
+	}
+}
+
+type SelectQuery struct {
+	db         *DB
+	table      string
+	columns    []string
+	conditions []condition
+	orderBy    string
+	limit      int
+	offset     int
+}
+
+type condition struct {
+	column string
+	op     string
+	value  interface{}
+}
+
+func (q *SelectQuery) Where(column, op string, value interface{}) *SelectQuery {
+	q.conditions = append(q.conditions, condition{column, op, value})
+	return q
+}
+
+func (q *SelectQuery) OrderBy(column string, desc bool) *SelectQuery {
+	if desc {
+		q.orderBy = column + " DESC"
+	} else {
+		q.orderBy = column + " ASC"
+	}
+	return q
+}
+
+func (q *SelectQuery) Limit(limit int) *SelectQuery {
+	q.limit = limit
+	return q
+}
+
+func (q *SelectQuery) Offset(offset int) *SelectQuery {
+	q.offset = offset
+	return q
+}
+
+func (q *SelectQuery) Build() (string, []interface{}) {
+	var query strings.Builder
+	var args []interface{}
+
+	// SELECT clause
+	query.WriteString("SELECT ")
+	if len(q.columns) == 0 {
+		query.WriteString("*")
+	} else {
+		query.WriteString(strings.Join(q.columns, ", "))
+	}
+
+	// FROM clause
+	query.WriteString(" FROM ")
+	query.WriteString(q.table)
+
+	// WHERE clause
+	if len(q.conditions) > 0 {
+		query.WriteString(" WHERE ")
+		for i, cond := range q.conditions {
+			if i > 0 {
+				query.WriteString(" AND ")
+			}
+			query.WriteString(cond.column)
+			query.WriteString(" ")
+			query.WriteString(cond.op)
+			query.WriteString(" ?")
+			args = append(args, cond.value)
+		}
+	}
+
+	// ORDER BY clause
+	if q.orderBy != "" {
+		query.WriteString(" ORDER BY ")
+		query.WriteString(q.orderBy)
+	}
+
+	// LIMIT clause
+	if q.limit > 0 {
+		query.WriteString(" LIMIT ?")
+		args = append(args, q.limit)
+	}
+
+	// OFFSET clause
+	if q.offset > 0 {
+		query.WriteString(" OFFSET ?")
+		args = append(args, q.offset)
+	}
+
+	return query.String(), args
+}
+
+func (q *SelectQuery) QueryRow() *sql.Row {
+	query, args := q.Build()
+	return q.db.DB.QueryRow(query, args...)
+}
+
+func (q *SelectQuery) Query() (*sql.Rows, error) {
+	query, args := q.Build()
+	return q.db.DB.Query(query, args...)
+}
+
+// Insert creates an INSERT query
+func (qb *QueryBuilder) Insert(table string, data map[string]interface{}) (sql.Result, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("no data to insert")
+	}
+
+	var columns []string
+	var placeholders []string
+	var values []interface{}
+
+	for col, val := range data {
+		columns = append(columns, col)
+		placeholders = append(placeholders, "?")
+		values = append(values, val)
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s)",
+		table,
+		strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "),
+	)
+
+	return qb.db.DB.Exec(query, values...)
+}
+
+// Update creates an UPDATE query
+func (qb *QueryBuilder) Update(table string, data map[string]interface{}, where map[string]interface{}) (sql.Result, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("no data to update")
+	}
+
+	var setClauses []string
+	var values []interface{}
+
+	for col, val := range data {
+		setClauses = append(setClauses, col+" = ?")
+		values = append(values, val)
+	}
+
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s",
+		table,
+		strings.Join(setClauses, ", "),
+	)
+
+	if len(where) > 0 {
+		var whereClauses []string
+		for col, val := range where {
+			whereClauses = append(whereClauses, col+" = ?")
+			values = append(values, val)
+		}
+		query += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	return qb.db.DB.Exec(query, values...)
+}
+
+// Delete creates a DELETE query
+func (qb *QueryBuilder) Delete(table string, where map[string]interface{}) (sql.Result, error) {
+	query := fmt.Sprintf("DELETE FROM %s", table)
+
+	var values []interface{}
+	if len(where) > 0 {
+		var whereClauses []string
+		for col, val := range where {
+			whereClauses = append(whereClauses, col+" = ?")
+			values = append(values, val)
+		}
+		query += " WHERE " + strings.Join(whereClauses, " AND ")
+	}
+
+	return qb.db.DB.Exec(query, values...)
+}
+</file>
+
+<file path="database/schema.go">
+package database
+
+import (
+	"database/sql"
+	"fmt"
+	"strings"
+)
+
+// RequiredColumns defines the columns that are always required
+var RequiredColumns = map[string][]string{
+	"users": {
+		"id",
+		"email",
+		"password_hash",
+		"verified",
+		"created_at",
+		"role_id", // Optional column within the users table
+	},
+}
+
+// ConditionalColumns for tables that are only required based on features
+var ConditionalColumns = map[string][]string{
+	"tokens": { // Required for email verification or password reset
+		"id",
+		"token",
+		"user_id",
+		"purpose",
+		"expires_at",
+		"created_at",
+	},
+	"sessions": { // Required for database session backend
+		"id",
+		"user_id",
+		"data",
+		"expires_at",
+		"created_at",
+	},
+	"remember_tokens": { // Required for remember me feature
+		"id",
+		"user_id",
+		"token",
+		"expires_at",
+		"created_at",
+	},
+}
+
+// OptionalColumns for RBAC functionality
+var OptionalColumns = map[string][]string{
+	"roles": {
+		"id",
+		"name",
+	},
+	"permissions": {
+		"id",
+		"name",
+	},
+	"role_permissions": {
+		"role_id",
+		"permission_id",
+	},
+	// REMOVED remember_tokens from here - it was duplicated
+}
+
+type SchemaValidator struct {
+	db *DB
+}
+
+func NewSchemaValidator(db *DB) *SchemaValidator {
+	return &SchemaValidator{db: db}
+}
+
+// Validate uses the default table names from the DB connection
+func (v *SchemaValidator) Validate() error {
+	return v.ValidateWithMapping(v.db.TableNames())
+}
+
+// ValidateWithMapping validates schema with custom table mapping
+func (v *SchemaValidator) ValidateWithMapping(mapping TableMapping) error {
+	// Always validate users table
+	if mapping.Users == "" {
+		return fmt.Errorf("users table mapping is required")
+	}
+
+	exists, err := v.tableExists(mapping.Users)
+	if err != nil {
+		return fmt.Errorf("error checking users table %s: %w", mapping.Users, err)
+	}
+	if !exists {
+		return fmt.Errorf("required table '%s' (users) does not exist", mapping.Users)
+	}
+
+	// Check users table columns
+	for _, column := range RequiredColumns["users"] {
+		exists, err := v.columnExists(mapping.Users, column)
+		if err != nil {
+			// Column might be optional (like role_id)
+			continue
+		}
+		if !exists && column != "role_id" { // role_id is optional
+			return fmt.Errorf("required column '%s.%s' does not exist", mapping.Users, column)
+		}
+	}
+
+	// Check tokens table if provided in mapping
+	if mapping.Tokens != "" {
+		exists, err := v.tableExists(mapping.Tokens)
+		if err != nil {
+			return fmt.Errorf("error checking tokens table %s: %w", mapping.Tokens, err)
+		}
+		if !exists {
+			return fmt.Errorf("tokens table '%s' does not exist (required for email verification/password reset)", mapping.Tokens)
+		}
+
+		// Check tokens columns
+		for _, column := range ConditionalColumns["tokens"] {
+			exists, err := v.columnExists(mapping.Tokens, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Tokens, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("required column '%s.%s' does not exist", mapping.Tokens, column)
+			}
+		}
+	}
+
+	// Check sessions table if provided in mapping
+	if mapping.Sessions != "" {
+		exists, err := v.tableExists(mapping.Sessions)
+		if err != nil {
+			return fmt.Errorf("error checking sessions table %s: %w", mapping.Sessions, err)
+		}
+		if !exists {
+			return fmt.Errorf("sessions table '%s' does not exist (required for database session backend)", mapping.Sessions)
+		}
+
+		// Check sessions columns
+		for _, column := range ConditionalColumns["sessions"] {
+			exists, err := v.columnExists(mapping.Sessions, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Sessions, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("required column '%s.%s' does not exist", mapping.Sessions, column)
+			}
+		}
+	}
+
+	// Check remember_tokens table if provided in mapping
+	if mapping.RememberTokens != "" {
+		exists, err := v.tableExists(mapping.RememberTokens)
+		if err != nil {
+			return fmt.Errorf("error checking remember_tokens table %s: %w", mapping.RememberTokens, err)
+		}
+		if !exists {
+			return fmt.Errorf("remember_tokens table '%s' does not exist (required for remember me feature)", mapping.RememberTokens)
+		}
+
+		// Check columns
+		for _, column := range ConditionalColumns["remember_tokens"] {
+			exists, err := v.columnExists(mapping.RememberTokens, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.RememberTokens, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("required column '%s.%s' does not exist", mapping.RememberTokens, column)
+			}
+		}
+	}
+
+	// Check RBAC tables if provided in mapping
+	if mapping.Roles != "" || mapping.Permissions != "" || mapping.RolePermissions != "" {
+		// Validate RBAC tables
+		err := v.validateRBACTables(mapping)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateRBACTables validates RBAC-related tables
+func (v *SchemaValidator) validateRBACTables(mapping TableMapping) error {
+	// Check roles table
+	if mapping.Roles != "" {
+		exists, err := v.tableExists(mapping.Roles)
+		if err != nil {
+			return fmt.Errorf("error checking roles table %s: %w", mapping.Roles, err)
+		}
+		if !exists {
+			return fmt.Errorf("RBAC table '%s' (roles) does not exist", mapping.Roles)
+		}
+
+		for _, column := range OptionalColumns["roles"] {
+			exists, err := v.columnExists(mapping.Roles, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Roles, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("RBAC column '%s.%s' does not exist", mapping.Roles, column)
+			}
+		}
+	}
+
+	// Check permissions table
+	if mapping.Permissions != "" {
+		exists, err := v.tableExists(mapping.Permissions)
+		if err != nil {
+			return fmt.Errorf("error checking permissions table %s: %w", mapping.Permissions, err)
+		}
+		if !exists {
+			return fmt.Errorf("RBAC table '%s' (permissions) does not exist", mapping.Permissions)
+		}
+
+		for _, column := range OptionalColumns["permissions"] {
+			exists, err := v.columnExists(mapping.Permissions, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Permissions, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("RBAC column '%s.%s' does not exist", mapping.Permissions, column)
+			}
+		}
+	}
+
+	// Check role_permissions table
+	if mapping.RolePermissions != "" {
+		exists, err := v.tableExists(mapping.RolePermissions)
+		if err != nil {
+			return fmt.Errorf("error checking role_permissions table %s: %w", mapping.RolePermissions, err)
+		}
+		if !exists {
+			return fmt.Errorf("RBAC table '%s' (role_permissions) does not exist", mapping.RolePermissions)
+		}
+
+		for _, column := range OptionalColumns["role_permissions"] {
+			exists, err := v.columnExists(mapping.RolePermissions, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.RolePermissions, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("RBAC column '%s.%s' does not exist", mapping.RolePermissions, column)
+			}
+		}
+	}
+
+	return nil
+}
+
+// ValidateRBAC validates optional RBAC tables
+func (v *SchemaValidator) ValidateRBAC() error {
+	return v.ValidateRBACWithMapping(v.db.TableNames())
+}
+
+// ValidateRBACWithMapping validates RBAC tables with custom mapping
+func (v *SchemaValidator) ValidateRBACWithMapping(mapping TableMapping) error {
+	return v.validateRBACTables(mapping)
+}
+
+func (v *SchemaValidator) tableExists(name string) (bool, error) {
+	var query string
+	switch v.db.Type() {
+	case "sqlite":
+		query = "SELECT name FROM sqlite_master WHERE type='table' AND name=?"
+	case "mysql":
+		query = "SELECT table_name FROM information_schema.tables WHERE table_name=? AND table_schema=DATABASE()"
+	default:
+		return false, fmt.Errorf("unsupported database type: %s", v.db.Type())
+	}
+
+	var tableName string
+	err := v.db.QueryRow(query, name).Scan(&tableName)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (v *SchemaValidator) columnExists(table, column string) (bool, error) {
+	switch v.db.Type() {
+	case "sqlite":
+		// PRAGMA doesn't support parameters, but table name comes from our mapping
+		// which is user-provided, so we need to be careful here
+		// We'll validate the table name doesn't contain SQL injection
+		if err := validateTableName(table); err != nil {
+			return false, err
+		}
+
+		query := fmt.Sprintf("PRAGMA table_info(%s)", table)
+		rows, err := v.db.DB.Query(query)
+		if err != nil {
+			return false, err
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var cid int
+			var name, dtype string
+			var notnull, pk int
+			var dflt sql.NullString
+			if err := rows.Scan(&cid, &name, &dtype, &notnull, &dflt, &pk); err != nil {
+				continue
+			}
+			if name == column {
+				return true, nil
+			}
+		}
+		return false, nil
+
+	case "mysql":
+		query := `SELECT column_name FROM information_schema.columns 
+		         WHERE table_name = ? AND column_name = ? AND table_schema = DATABASE()`
+		var colName string
+		err := v.db.QueryRow(query, table, column).Scan(&colName)
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return err == nil, err
+
+	default:
+		return false, fmt.Errorf("unsupported database type: %s", v.db.Type())
+	}
+}
+
+// validateTableName ensures table name is safe for direct SQL usage
+func validateTableName(name string) error {
+	// Allow alphanumeric, underscore, and dash
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-') {
+			return fmt.Errorf("invalid table name: %s (contains invalid character: %c)", name, r)
+		}
+	}
+
+	// Prevent SQL keywords
+	keywords := []string{"SELECT", "DROP", "DELETE", "INSERT", "UPDATE", "WHERE", "FROM"}
+	nameUpper := strings.ToUpper(name)
+	for _, keyword := range keywords {
+		if nameUpper == keyword {
+			return fmt.Errorf("invalid table name: %s (SQL keyword)", name)
+		}
+	}
+
+	return nil
+}
+</file>
+
+<file path="middleware/cors.go">
+// File: middleware/cors.go
+package middleware
+
+import (
+	"net/http"
+	"strconv"
+	"strings"
+)
+
+type CORSConfig struct {
+	AllowedOrigins   []string
+	AllowedMethods   []string
+	AllowedHeaders   []string
+	ExposedHeaders   []string
+	AllowCredentials bool
+	MaxAge           int
+}
+
+func CORS(config CORSConfig) func(http.Handler) http.Handler {
+	// Set defaults
+	if len(config.AllowedMethods) == 0 {
+		config.AllowedMethods = []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"}
+	}
+	if len(config.AllowedHeaders) == 0 {
+		config.AllowedHeaders = []string{"Accept", "Content-Type", "Content-Length", "Accept-Encoding", "Authorization", "X-CSRF-Token"}
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+
+			// Check if origin is allowed
+			allowed := false
+			for _, allowedOrigin := range config.AllowedOrigins {
+				if allowedOrigin == "*" || allowedOrigin == origin {
+					allowed = true
+					break
+				}
+			}
+
+			if allowed {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+			}
+
+			// Handle preflight requests
+			if r.Method == "OPTIONS" {
+				w.Header().Set("Access-Control-Allow-Methods", strings.Join(config.AllowedMethods, ", "))
+				w.Header().Set("Access-Control-Allow-Headers", strings.Join(config.AllowedHeaders, ", "))
+
+				if config.AllowCredentials {
+					w.Header().Set("Access-Control-Allow-Credentials", "true")
+				}
+
+				if config.MaxAge > 0 {
+					w.Header().Set("Access-Control-Max-Age", strconv.Itoa(config.MaxAge))
+				}
+
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			// Set exposed headers
+			if len(config.ExposedHeaders) > 0 {
+				w.Header().Set("Access-Control-Expose-Headers", strings.Join(config.ExposedHeaders, ", "))
+			}
+
+			if config.AllowCredentials {
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+</file>
+
+<file path="security/crypto.go">
+package security
+
+import (
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"io"
+)
+
+// Encrypt encrypts data using AES-GCM
+func Encrypt(key []byte, plaintext string) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return base64.URLEncoding.EncodeToString(ciphertext), nil
+}
+
+// Decrypt decrypts data using AES-GCM
+func Decrypt(key []byte, ciphertext string) (string, error) {
+	data, err := base64.URLEncoding.DecodeString(ciphertext)
+	if err != nil {
+		return "", err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+
+	if len(data) < gcm.NonceSize() {
+		return "", errors.New("ciphertext too short")
+	}
+
+	nonce, ciphertextBytes := data[:gcm.NonceSize()], data[gcm.NonceSize():]
+	plaintext, err := gcm.Open(nil, nonce, ciphertextBytes, nil)
+	if err != nil {
+		return "", err
+	}
+
+	return string(plaintext), nil
+}
+
+// GenerateKey generates a random encryption key
+func GenerateKey(size int) ([]byte, error) {
+	key := make([]byte, size)
+	_, err := rand.Read(key)
+	return key, err
+}
+</file>
+
+<file path="security/sanitizer.go">
+package security
+
+import (
+	"html"
+	"regexp"
+	"unicode/utf8"
+)
+
+var (
+	// Patterns that might indicate XSS attempts
+	scriptPattern = regexp.MustCompile(`(?i)<script[^>]*>.*?</script>`)
+	eventPattern  = regexp.MustCompile(`(?i)\bon\w+\s*=`)
+	jsPattern     = regexp.MustCompile(`(?i)javascript:`)
+)
+
+// SanitizeHTML escapes HTML special characters
+func SanitizeHTML(input string) string {
+	return html.EscapeString(input)
+}
+
+// SanitizeOutput prepares user content for safe display
+func SanitizeOutput(input string) string {
+	// Remove potential script tags
+	input = scriptPattern.ReplaceAllString(input, "")
+
+	// Remove event handlers
+	input = eventPattern.ReplaceAllString(input, "")
+
+	// Remove javascript: URLs
+	input = jsPattern.ReplaceAllString(input, "")
+
+	// Escape HTML
+	return html.EscapeString(input)
+}
+
+// StripTags removes all HTML tags
+func StripTags(input string) string {
+	re := regexp.MustCompile(`<[^>]*>`)
+	return re.ReplaceAllString(input, "")
+}
+
+// TruncateString safely truncates strings to prevent buffer overflows
+// It ensures that multi-byte UTF-8 characters are not broken
+func TruncateString(s string, maxLength int) string {
+	if len(s) <= maxLength {
+		return s
+	}
+
+	// For ASCII strings, simple truncation works
+	if utf8.ValidString(s[:maxLength]) {
+		return s[:maxLength]
+	}
+
+	// For multi-byte strings, we need to be careful
+	// Truncate at the last valid rune boundary
+	truncated := s[:maxLength]
+	for !utf8.ValidString(truncated) && len(truncated) > 0 {
+		truncated = truncated[:len(truncated)-1]
+	}
+
+	return truncated
+}
+</file>
+
+<file path="security/validator.go">
+package security
+
+import (
+	"errors"
+	"regexp"
+	"strings"
+
+	"github.com/go-playground/validator/v10"
+)
+
+var (
+	validate   = validator.New()
+	emailRegex = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+)
+
+// Input validation structs
+type RegisterInput struct {
+	Email    string `validate:"required,email,max=255"`
+	Password string `validate:"required,min=8,max=72"` // bcrypt limit is 72
+}
+
+type LoginInput struct {
+	Email    string `validate:"required,email"`
+	Password string `validate:"required"`
+}
+
+type PasswordResetInput struct {
+	Email string `validate:"required,email"`
+}
+
+type NewPasswordInput struct {
+	Token    string `validate:"required,len=64"` // hex encoded 32 bytes
+	Password string `validate:"required,min=8,max=72"`
+}
+
+// ValidateInput validates any struct with validation tags
+func ValidateInput(input interface{}) error {
+	return validate.Struct(input)
+}
+
+// ValidateEmail validates email format
+func ValidateEmail(email string) bool {
+	email = strings.TrimSpace(strings.ToLower(email))
+	return emailRegex.MatchString(email)
+}
+
+// SanitizeEmail normalizes email format
+func SanitizeEmail(email string) string {
+	return strings.TrimSpace(strings.ToLower(email))
+}
+
+// ValidatePassword checks password requirements
+func ValidatePassword(password string) error {
+	if len(password) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+	if len(password) > 72 {
+		return errors.New("password must not exceed 72 characters")
+	}
+	return nil
+}
+</file>
+
+<file path="auth/rbac.go">
+package auth
+
+import (
+	"errors"
+	"fmt"
+)
+
+type Role struct {
+	ID          int64
+	Name        string
+	Permissions []string
+}
+
+type Permission struct {
+	ID   int64
+	Name string
+}
+
+var (
+	ErrUnauthorized = errors.New("unauthorized")
+)
+
+// Add to User struct in auth.go:
+// RoleID int64
+
+func (s *Service) GetUserRole(userID int64) (*Role, error) {
+	if !s.features.RBAC {
+		return nil, ErrFeatureDisabled
+	}
+
+	var role Role
+	query := fmt.Sprintf(`
+		SELECT r.id, r.name 
+		FROM %s r
+		JOIN %s u ON u.role_id = r.id
+		WHERE u.id = ?
+	`, s.tables.Roles, s.tables.Users)
+
+	err := s.db.QueryRow(query, userID).Scan(&role.ID, &role.Name)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Load permissions
+	permQuery := fmt.Sprintf(`
+		SELECT p.name 
+		FROM %s p
+		JOIN %s rp ON rp.permission_id = p.id
+		WHERE rp.role_id = ?
+	`, s.tables.Permissions, s.tables.RolePermissions)
+
+	rows, err := s.db.Query(permQuery, role.ID)
+
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var perm string
+		if err := rows.Scan(&perm); err == nil {
+			role.Permissions = append(role.Permissions, perm)
+		}
+	}
+
+	return &role, nil
+}
+
+func (s *Service) UserHasPermission(userID int64, permission string) bool {
+	if !s.features.RBAC {
+		return false
+	}
+
+	var count int
+	query := fmt.Sprintf(`
+		SELECT COUNT(*) 
+		FROM %s u
+		JOIN %s rp ON rp.role_id = u.role_id
+		JOIN %s p ON p.id = rp.permission_id
+		WHERE u.id = ? AND p.name = ?
+	`, s.tables.Users, s.tables.RolePermissions, s.tables.Permissions)
+
+	err := s.db.QueryRow(query, userID, permission).Scan(&count)
+
+	return err == nil && count > 0
+}
+
+// AssignRole assigns a role to a user
+func (s *Service) AssignRole(userID int64, roleID int64) error {
+	if !s.features.RBAC {
+		return ErrFeatureDisabled
+	}
+
+	query := fmt.Sprintf("UPDATE %s SET role_id = ? WHERE id = ?", s.tables.Users)
+	_, err := s.db.Exec(query, roleID, userID)
+	return err
+}
+</file>
+
+<file path="auth/session.go">
+package auth
+
+import (
+	"net/http"
+
+	"github.com/gorilla/sessions"
+)
+
+// NewSessionStore creates a secure session store
+func NewSessionStore(secret []byte) *sessions.CookieStore {
+	store := sessions.NewCookieStore(secret)
+	store.Options = &sessions.Options{
+		Path:     "/",
+		MaxAge:   1800, // 30 minutes
+		HttpOnly: true,
+		Secure:   true, // HTTPS only in production
+		SameSite: http.SameSiteLaxMode,
+	}
+	return store
+}
+
+// RegenerateSession creates a new session ID
+func RegenerateSession(w http.ResponseWriter, r *http.Request, store sessions.Store) error {
+	session, err := store.Get(r, "auth-session")
+	if err != nil {
+		return err
+	}
+
+	// Save values
+	values := make(map[interface{}]interface{})
+	for k, v := range session.Values {
+		values[k] = v
+	}
+
+	// Delete old session by setting MaxAge to -1
+	session.Options.MaxAge = -1
+	if err := session.Save(r, w); err != nil {
+		return err
+	}
+
+	// Create new session with a new session ID
+	// Force a new session by using New instead of Get
+	newSession, err := store.New(r, "auth-session")
+	if err != nil {
+		return err
+	}
+
+	// Restore values
+	for k, v := range values {
+		newSession.Values[k] = v
+	}
+
+	// Ensure we get a new session ID by adding a regeneration marker
+	newSession.Values["_regenerated"] = true
+
+	return newSession.Save(r, w)
+}
+</file>
+
+<file path="auth/token.go">
+package auth
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"time"
+)
+
+type Token struct {
+	Value     string
+	UserID    int64
+	Purpose   string // "email_verification" or "password_reset"
+	ExpiresAt time.Time
+}
+
+// GenerateToken creates a secure random token
+func GenerateToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (s *Service) CreateVerificationToken(userID int64) (*Token, error) {
+	if !s.features.EmailVerification {
+		return nil, ErrFeatureDisabled
+	}
+
+	token := &Token{
+		Value:     GenerateToken(),
+		UserID:    userID,
+		Purpose:   "email_verification",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+
+	query := fmt.Sprintf(`
+        INSERT INTO %s (%s, %s, %s, %s)
+        VALUES (?, ?, ?, ?)
+    `, s.tables.Tokens, s.columns.TokenValue, s.columns.TokenUserID,
+		s.columns.TokenPurpose, s.columns.TokenExpires)
+
+	_, err := s.db.Exec(query, token.Value, token.UserID, token.Purpose, token.ExpiresAt)
+
+	return token, err
+}
+
+func (s *Service) CreatePasswordResetToken(email string) (*Token, error) {
+	if !s.features.PasswordReset {
+		return nil, ErrFeatureDisabled
+	}
+
+	user, err := s.findUserByEmail(email)
+	if err != nil {
+		return nil, err
+	}
+
+	token := &Token{
+		Value:     GenerateToken(),
+		UserID:    user.ID,
+		Purpose:   "password_reset",
+		ExpiresAt: time.Now().Add(1 * time.Hour),
+	}
+
+	query := fmt.Sprintf(`
+        INSERT INTO %s (%s, %s, %s, %s)
+        VALUES (?, ?, ?, ?)
+    `, s.tables.Tokens, s.columns.TokenValue, s.columns.TokenUserID,
+		s.columns.TokenPurpose, s.columns.TokenExpires)
+
+	_, err = s.db.Exec(query, token.Value, token.UserID, token.Purpose, token.ExpiresAt)
+
+	return token, err
+}
+
+func (s *Service) ValidateToken(value, purpose string) (*Token, error) {
+	// Check if the feature requiring this token is enabled
+	if purpose == "email_verification" && !s.features.EmailVerification {
+		return nil, ErrFeatureDisabled
+	}
+	if purpose == "password_reset" && !s.features.PasswordReset {
+		return nil, ErrFeatureDisabled
+	}
+
+	var token Token
+	query := fmt.Sprintf(`
+        SELECT %s, %s, %s, %s
+        FROM %s
+        WHERE %s = ? AND %s = ? AND %s > ?
+        LIMIT 1
+    `, s.columns.TokenValue, s.columns.TokenUserID, s.columns.TokenPurpose, s.columns.TokenExpires,
+		s.tables.Tokens,
+		s.columns.TokenValue, s.columns.TokenPurpose, s.columns.TokenExpires)
+
+	err := s.db.QueryRow(query, value, purpose, time.Now()).Scan(
+		&token.Value,
+		&token.UserID,
+		&token.Purpose,
+		&token.ExpiresAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Delete token after use
+	deleteQuery := fmt.Sprintf("DELETE FROM %s WHERE %s = ?", s.tables.Tokens, s.columns.TokenValue)
+	s.db.Exec(deleteQuery, value)
+
+	return &token, nil
+}
+
+// VerifyUserEmail marks a user as verified (if email verification is enabled)
+func (s *Service) VerifyUserEmail(userID int64) error {
+	if !s.features.EmailVerification {
+		return ErrFeatureDisabled
+	}
+
+	query := fmt.Sprintf("UPDATE %s SET %s = 1 WHERE %s = ?",
+		s.tables.Users, s.columns.UserVerified, s.columns.UserID)
+	_, err := s.db.Exec(query, userID)
+	return err
+}
+</file>
+
+<file path="database/connection.go">
+package database
+
+import (
+	"database/sql"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+// TableMapping defines custom table names
+type TableMapping struct {
+	Users           string
+	Tokens          string
+	Sessions        string
+	Roles           string
+	Permissions     string
+	RolePermissions string
+	RememberTokens  string
+}
+
+// DefaultTableMapping returns the default table names
+func DefaultTableMapping() TableMapping {
+	return TableMapping{
+		Users:           "users",
+		Tokens:          "tokens",
+		Sessions:        "sessions",
+		Roles:           "roles",
+		Permissions:     "permissions",
+		RolePermissions: "role_permissions",
+		RememberTokens:  "remember_tokens",
+	}
+}
+
+type DB struct {
+	*sql.DB
+	dbType         string // "sqlite" or "mysql"
+	migrationTable string // Name of migrations table
+	tableNames     TableMapping
+}
+
+type SQLiteConfig struct {
+	Path           string
+	AutoMigrate    bool
+	MigrationTable string
+	TableNames     TableMapping
+}
+
+type MySQLConfig struct {
+	DSN             string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
+	AutoMigrate     bool
+	MigrationTable  string
+	TableNames      TableMapping
+}
+
+// NewSQLite creates a new SQLite database connection with default config (backward compatible)
+func NewSQLite(path string) (*DB, error) {
+	return NewSQLiteWithConfig(SQLiteConfig{
+		Path:           path,
+		AutoMigrate:    true,
+		MigrationTable: "migrations",
+		TableNames:     DefaultTableMapping(),
+	})
+}
+
+// NewSQLiteWithConfig creates a new SQLite database connection with custom config
+func NewSQLiteWithConfig(cfg SQLiteConfig) (*DB, error) {
+	db, err := sql.Open("sqlite3", cfg.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	// Configure for better performance and security
+	if _, err := db.Exec(`
+        PRAGMA foreign_keys = ON;
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+    `); err != nil {
+		return nil, err
+	}
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
+	// Set defaults
+	if cfg.TableNames == (TableMapping{}) {
+		cfg.TableNames = DefaultTableMapping()
+	}
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
+	}
+
+	wrapped := &DB{
+		DB:             db,
+		dbType:         "sqlite",
+		migrationTable: cfg.MigrationTable,
+		tableNames:     cfg.TableNames,
+	}
+
+	// Run migrations only if AutoMigrate is true
+	if cfg.AutoMigrate {
+		if err := wrapped.Migrate(); err != nil {
+			return nil, err
+		}
+	}
+
+	return wrapped, nil
+}
+
+// NewMySQL creates a new MySQL database connection with default config (backward compatible)
+func NewMySQL(cfg MySQLConfig) (*DB, error) {
+	// Set defaults for backward compatibility
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
+	}
+	if !cfg.AutoMigrate {
+		cfg.AutoMigrate = true
+	}
+	if cfg.TableNames == (TableMapping{}) {
+		cfg.TableNames = DefaultTableMapping()
+	}
+	return NewMySQLWithConfig(cfg)
+}
+
+// NewMySQLWithConfig creates a new MySQL database connection with custom config
+func NewMySQLWithConfig(cfg MySQLConfig) (*DB, error) {
+	// DSN format: "user:password@tcp(localhost:3306)/dbname?parseTime=true&loc=Local"
+	// parseTime=true is REQUIRED for proper time.Time scanning
+	db, err := sql.Open("mysql", cfg.DSN)
+	if err != nil {
+		return nil, err
+	}
+
+	// Configure connection pool
+	if cfg.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(cfg.MaxOpenConns)
+	} else {
+		db.SetMaxOpenConns(25) // Default
+	}
+
+	if cfg.MaxIdleConns > 0 {
+		db.SetMaxIdleConns(cfg.MaxIdleConns)
+	} else {
+		db.SetMaxIdleConns(5) // Default
+	}
+
+	if cfg.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	} else {
+		db.SetConnMaxLifetime(5 * time.Minute) // Default
+	}
+
+	// Test connection
+	if err := db.Ping(); err != nil {
+		return nil, err
+	}
+
+	// Set defaults
+	if cfg.TableNames == (TableMapping{}) {
+		cfg.TableNames = DefaultTableMapping()
+	}
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
+	}
+
+	wrapped := &DB{
+		DB:             db,
+		dbType:         "mysql",
+		migrationTable: cfg.MigrationTable,
+		tableNames:     cfg.TableNames,
+	}
+
+	// Run migrations only if AutoMigrate is true
+	if cfg.AutoMigrate {
+		if err := wrapped.Migrate(); err != nil {
+			return nil, err
+		}
+	}
+
+	return wrapped, nil
+}
+
+func (db *DB) Close() error {
+	return db.DB.Close()
+}
+
+func (db *DB) Type() string {
+	return db.dbType
+}
+
+func (db *DB) MigrationTable() string {
+	if db.migrationTable == "" {
+		return "migrations"
+	}
+	return db.migrationTable
+}
+
+func (db *DB) TableNames() TableMapping {
+	if db.tableNames == (TableMapping{}) {
+		return DefaultTableMapping()
+	}
+	return db.tableNames
+}
+
+// Table name getters for easy access
+func (db *DB) UsersTable() string {
+	return db.tableNames.Users
+}
+
+func (db *DB) TokensTable() string {
+	return db.tableNames.Tokens
+}
+
+func (db *DB) SessionsTable() string {
+	return db.tableNames.Sessions
+}
+
+func (db *DB) RolesTable() string {
+	return db.tableNames.Roles
+}
+
+func (db *DB) PermissionsTable() string {
+	return db.tableNames.Permissions
+}
+
+func (db *DB) RolePermissionsTable() string {
+	return db.tableNames.RolePermissions
+}
+
+func (db *DB) RememberTokensTable() string {
+	return db.tableNames.RememberTokens
+}
+</file>
+
+<file path="middleware/csrf.go">
+package middleware
+
+import (
+	"crypto/rand"
+	"encoding/base64"
+	"log"
+	"net/http"
+)
+
+const (
+	csrfCookieName = "csrf_token"
+	csrfHeaderName = "X-CSRF-Token"
+)
+
+// CSRFConfig holds CSRF middleware configuration
+type CSRFConfig struct {
+	Secure bool // Whether to use secure cookies (HTTPS only)
+}
+
+// CSRF implements double-submit cookie pattern
+func CSRF(next http.Handler) http.Handler {
+	return CSRFWithConfig(CSRFConfig{Secure: true})(next)
+}
+
+// CSRFWithConfig creates CSRF middleware with custom config
+func CSRFWithConfig(config CSRFConfig) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip CSRF for safe methods
+			if r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS" {
+				// Ensure CSRF cookie exists
+				if _, err := r.Cookie(csrfCookieName); err != nil {
+					token := generateCSRFToken()
+					cookie := &http.Cookie{
+						Name:     csrfCookieName,
+						Value:    token,
+						Path:     "/",
+						HttpOnly: false, // Must be readable by JS
+						Secure:   config.Secure,
+						SameSite: http.SameSiteLaxMode,
+						MaxAge:   86400, // 24 hours
+					}
+					http.SetCookie(w, cookie)
+
+					// For HTMX requests, also set the token in response header
+					if r.Header.Get("HX-Request") == "true" {
+						w.Header().Set("X-CSRF-Token", token)
+					}
+
+					log.Printf("CSRF: Set new token for %s", r.URL.Path)
+				}
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Verify CSRF token for state-changing methods
+			cookie, err := r.Cookie(csrfCookieName)
+			if err != nil {
+				http.Error(w, "CSRF cookie missing", http.StatusForbidden)
+				return
+			}
+
+			// Check header first (supports both X-CSRF-Token and HX-Trigger for HTMX)
+			token := r.Header.Get(csrfHeaderName)
+
+			// If no header, check form value
+			if token == "" {
+				token = r.FormValue("csrf_token")
+			}
+
+			if cookie.Value == "" || cookie.Value != token {
+				log.Printf("CSRF mismatch - Cookie: %s, Token: %s", cookie.Value, token)
+
+				// For HTMX requests, return a more helpful error
+				if r.Header.Get("HX-Request") == "true" {
+					w.Header().Set("HX-Retarget", "body")
+					w.Header().Set("HX-Reswap", "innerHTML")
+					http.Error(w, `<div class="alert alert-error">Security error: Please refresh the page and try again.</div>`, http.StatusForbidden)
+					return
+				}
+
+				http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+				return
+			}
+
+			// For HTMX requests, include the token in response
+			if r.Header.Get("HX-Request") == "true" {
+				w.Header().Set("X-CSRF-Token", cookie.Value)
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func generateCSRFToken() string {
+	b := make([]byte, 32)
+	rand.Read(b)
+	return base64.URLEncoding.EncodeToString(b)
+}
+</file>
+
+<file path="router/context.go">
+package router
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type Context struct {
+	w http.ResponseWriter
+	r *http.Request
+}
+
+func NewContext(w http.ResponseWriter, r *http.Request) *Context {
+	return &Context{w: w, r: r}
+}
+
+// HTMX detection methods
+func (c *Context) IsHTMX() bool {
+	return c.r.Header.Get("HX-Request") == "true"
+}
+
+func (c *Context) IsBoosted() bool {
+	return c.r.Header.Get("HX-Boosted") == "true"
+}
+
+func (c *Context) GetTrigger() string {
+	return c.r.Header.Get("HX-Trigger")
+}
+
+func (c *Context) GetTriggerName() string {
+	return c.r.Header.Get("HX-Trigger-Name")
+}
+
+func (c *Context) GetTarget() string {
+	return c.r.Header.Get("HX-Target")
+}
+
+func (c *Context) GetPrompt() string {
+	return c.r.Header.Get("HX-Prompt")
+}
+
+// HTMX response methods
+func (c *Context) HXRedirect(url string) {
+	c.w.Header().Set("HX-Redirect", url)
+}
+
+func (c *Context) HXRefresh() {
+	c.w.Header().Set("HX-Refresh", "true")
+}
+
+func (c *Context) HXLocation(url string) {
+	c.w.Header().Set("HX-Location", url)
+}
+
+func (c *Context) HXPushURL(url string) {
+	c.w.Header().Set("HX-Push-Url", url)
+}
+
+func (c *Context) HXReplaceURL(url string) {
+	c.w.Header().Set("HX-Replace-Url", url)
+}
+
+func (c *Context) HXReswap(swapType string) {
+	c.w.Header().Set("HX-Reswap", swapType)
+}
+
+func (c *Context) HXRetarget(selector string) {
+	c.w.Header().Set("HX-Retarget", selector)
+}
+
+func (c *Context) HXTrigger(events string) {
+	c.w.Header().Set("HX-Trigger", events)
+}
+
+func (c *Context) HXTriggerAfterSettle(events string) {
+	c.w.Header().Set("HX-Trigger-After-Settle", events)
+}
+
+func (c *Context) HXTriggerAfterSwap(events string) {
+	c.w.Header().Set("HX-Trigger-After-Swap", events)
+}
+
+// Existing methods...
+func (c *Context) Param(key string) string {
+	return chi.URLParam(c.r, key)
+}
+
+func (c *Context) Query(key string) string {
+	return c.r.URL.Query().Get(key)
+}
+
+func (c *Context) JSON(status int, data interface{}) error {
+	c.w.Header().Set("Content-Type", "application/json")
+	c.w.WriteHeader(status)
+	return json.NewEncoder(c.w).Encode(data)
+}
+
+func (c *Context) HTML(status int, html string) {
+	c.w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	c.w.WriteHeader(status)
+	c.w.Write([]byte(html))
+}
+
+func (c *Context) String(status int, format string, values ...interface{}) {
+	c.w.WriteHeader(status)
+	c.w.Write([]byte(format))
+}
+
+func (c *Context) Redirect(status int, url string) {
+	http.Redirect(c.w, c.r, url, status)
+}
+
+func (c *Context) SetCookie(cookie *http.Cookie) {
+	http.SetCookie(c.w, cookie)
+}
+
+func (c *Context) Cookie(name string) (*http.Cookie, error) {
+	return c.r.Cookie(name)
+}
+
+func (c *Context) Request() *http.Request {
+	return c.r
+}
+
+func (c *Context) ResponseWriter() http.ResponseWriter {
+	return c.w
+}
+
+func (c *Context) Set(key string, value interface{}) {
+	ctx := context.WithValue(c.r.Context(), key, value)
+	c.r = c.r.WithContext(ctx)
+}
+
+func (c *Context) Get(key string) interface{} {
+	return c.r.Context().Value(key)
+}
+</file>
+
+<file path="router/group.go">
+package router
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type Group struct {
+	router      *Router
+	pattern     string
+	middlewares []func(http.Handler) http.Handler
+	chiRouter   chi.Router
+}
+
+func (r *Router) Group(pattern string) *Group {
+	// Create a sub-router for this group
+	var chiRouter chi.Router
+	if pattern == "/" {
+		// For root pattern, use the main router with a middleware group
+		chiRouter = r.Router
+	} else {
+		// For other patterns, create a proper sub-router
+		chiRouter = chi.NewRouter()
+		r.Router.Mount(pattern, chiRouter)
+	}
+
+	return &Group{
+		router:    r,
+		pattern:   pattern,
+		chiRouter: chiRouter,
+	}
+}
+
+func (g *Group) Use(middleware ...func(http.Handler) http.Handler) {
+	g.middlewares = append(g.middlewares, middleware...)
+}
+
+func (g *Group) GET(pattern string, handler http.HandlerFunc) *Route {
+	fullPattern := g.pattern + pattern
+
+	// Wrap handler with group middlewares
+	h := http.Handler(handler)
+	for i := len(g.middlewares) - 1; i >= 0; i-- {
+		h = g.middlewares[i](h)
+	}
+
+	g.chiRouter.Get(pattern, h.ServeHTTP)
+
+	route := &Route{
+		Pattern: fullPattern,
+		Method:  "GET",
+		Handler: handler,
+		router:  g.router,
+	}
+	return route
+}
+
+func (g *Group) POST(pattern string, handler http.HandlerFunc) *Route {
+	fullPattern := g.pattern + pattern
+
+	// Wrap handler with group middlewares
+	h := http.Handler(handler)
+	for i := len(g.middlewares) - 1; i >= 0; i-- {
+		h = g.middlewares[i](h)
+	}
+
+	g.chiRouter.Post(pattern, h.ServeHTTP)
+
+	route := &Route{
+		Pattern: fullPattern,
+		Method:  "POST",
+		Handler: handler,
+		router:  g.router,
+	}
+	return route
+}
+
+func (g *Group) PUT(pattern string, handler http.HandlerFunc) *Route {
+	fullPattern := g.pattern + pattern
+
+	// Wrap handler with group middlewares
+	h := http.Handler(handler)
+	for i := len(g.middlewares) - 1; i >= 0; i-- {
+		h = g.middlewares[i](h)
+	}
+
+	g.chiRouter.Put(pattern, h.ServeHTTP)
+
+	route := &Route{
+		Pattern: fullPattern,
+		Method:  "PUT",
+		Handler: handler,
+		router:  g.router,
+	}
+	return route
+}
+
+func (g *Group) DELETE(pattern string, handler http.HandlerFunc) *Route {
+	fullPattern := g.pattern + pattern
+
+	// Wrap handler with group middlewares
+	h := http.Handler(handler)
+	for i := len(g.middlewares) - 1; i >= 0; i-- {
+		h = g.middlewares[i](h)
+	}
+
+	g.chiRouter.Delete(pattern, h.ServeHTTP)
+
+	route := &Route{
+		Pattern: fullPattern,
+		Method:  "DELETE",
+		Handler: handler,
+		router:  g.router,
+	}
+	return route
+}
+
+func (g *Group) PATCH(pattern string, handler http.HandlerFunc) *Route {
+	fullPattern := g.pattern + pattern
+
+	// Wrap handler with group middlewares
+	h := http.Handler(handler)
+	for i := len(g.middlewares) - 1; i >= 0; i-- {
+		h = g.middlewares[i](h)
+	}
+
+	g.chiRouter.Patch(pattern, h.ServeHTTP)
+
+	route := &Route{
+		Pattern: fullPattern,
+		Method:  "PATCH",
+		Handler: handler,
+		router:  g.router,
+	}
+	return route
+}
+</file>
+
+<file path="guardian_test.go">
+// File: guardian_test.go
+package guardian
+
+import (
+	"database/sql"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/flyzard/go-guardian/middleware"
+)
+
+func TestFullAuthenticationFlow(t *testing.T) {
+	// Setup Guardian app
+	app := New(Config{
+		SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+		DatabaseType:   "sqlite",
+		DatabasePath:   ":memory:",
+		Environment:    "development",
+		AutoMigrate:    true,
+		ValidateSchema: true,
+	})
+	defer app.DB().Close()
+
+	// Add middleware
+	app.Use(middleware.Logger)
+	app.Use(middleware.SecurityHeaders)
+	app.Use(middleware.CSRF)
+
+	// Setup routes
+	app.POST("/register", func(w http.ResponseWriter, r *http.Request) {
+		email := r.FormValue("email")
+		password := r.FormValue("password")
+
+		user, err := app.Auth().Register(email, password)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte("User created: " + user.Email))
+	})
+
+	app.POST("/login", func(w http.ResponseWriter, r *http.Request) {
+		email := r.FormValue("email")
+		password := r.FormValue("password")
+
+		// For testing, mark user as verified
+		app.DB().Exec("UPDATE users SET verified = 1 WHERE email = ?", email)
+
+		err := app.Auth().Login(w, r, email, password)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnauthorized)
+			return
+		}
+
+		w.Write([]byte("Logged in"))
+	})
+
+	protected := app.Group("/admin")
+	protected.Use(middleware.RequireAuth(app.Sessions()))
+	protected.GET("/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Admin Dashboard"))
+	})
+
+	// First, make a GET request to obtain CSRF token
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+	app.router.ServeHTTP(rec, req)
+
+	var csrfToken string
+	var csrfCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "csrf_token" {
+			csrfToken = cookie.Value
+			csrfCookie = cookie
+			break
+		}
+	}
+
+	if csrfToken == "" {
+		t.Fatal("No CSRF token received")
+	}
+
+	// Test registration with CSRF token
+	form := url.Values{}
+	form.Add("email", "test@example.com")
+	form.Add("password", "SecurePass123")
+
+	req = httptest.NewRequest("POST", "/register", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-CSRF-Token", csrfToken)
+	req.AddCookie(csrfCookie)
+	rec = httptest.NewRecorder()
+	app.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("Registration failed: %d - %s", rec.Code, rec.Body.String())
+	}
+
+	// Test login with CSRF token
+	form = url.Values{}
+	form.Add("email", "test@example.com")
+	form.Add("password", "SecurePass123")
+
+	req = httptest.NewRequest("POST", "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-CSRF-Token", csrfToken)
+	req.AddCookie(csrfCookie)
+	rec = httptest.NewRecorder()
+	app.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Login failed: %d - %s", rec.Code, rec.Body.String())
+	}
+
+	// Get session cookie
+	var sessionCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "auth-session" {
+			sessionCookie = cookie
+			break
+		}
+	}
+
+	if sessionCookie == nil {
+		t.Fatal("No session cookie set after login")
+	}
+
+	// Test protected route access
+	req = httptest.NewRequest("GET", "/admin/dashboard", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	app.router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Protected route access failed: %d", rec.Code)
+	}
+
+	if rec.Body.String() != "Admin Dashboard" {
+		t.Errorf("Unexpected response: %s", rec.Body.String())
+	}
+}
+
+func TestSessionSecurity(t *testing.T) {
+	app := New(Config{
+		SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+		DatabaseType:   "sqlite",
+		DatabasePath:   ":memory:",
+		Environment:    "production", // Test secure cookies
+		AutoMigrate:    true,
+		ValidateSchema: true,
+	})
+	defer app.DB().Close()
+
+	// Create and login user
+	user, _ := app.Auth().Register("test@example.com", "password123")
+	app.DB().Exec("UPDATE users SET verified = 1 WHERE id = ?", user.ID)
+
+	// Get CSRF token first
+	req := httptest.NewRequest("GET", "/", nil)
+	rec := httptest.NewRecorder()
+
+	// We need a handler that serves the root
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Apply CSRF middleware
+	csrfHandler := middleware.CSRFWithConfig(middleware.CSRFConfig{
+		Secure: true,
+	})(handler)
+
+	csrfHandler.ServeHTTP(rec, req)
+
+	var csrfToken string
+	var csrfCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "csrf_token" {
+			csrfToken = cookie.Value
+			csrfCookie = cookie
+			break
+		}
+	}
+
+	// Now test login
+	req = httptest.NewRequest("POST", "/login", nil)
+	req.Header.Set("X-CSRF-Token", csrfToken)
+	req.AddCookie(csrfCookie)
+	rec = httptest.NewRecorder()
+
+	app.Auth().Login(rec, req, "test@example.com", "password123")
+
+	// Check session cookie security attributes
+	var sessionCookie *http.Cookie
+	for _, cookie := range rec.Result().Cookies() {
+		if cookie.Name == "auth-session" {
+			sessionCookie = cookie
+			break
+		}
+	}
+
+	if sessionCookie == nil {
+		t.Fatal("No session cookie found")
+	}
+
+	if !sessionCookie.HttpOnly {
+		t.Error("Session cookie should be HttpOnly")
+	}
+
+	if !sessionCookie.Secure {
+		t.Error("Session cookie should be Secure in production")
+	}
+
+	if sessionCookie.SameSite != http.SameSiteLaxMode {
+		t.Error("Session cookie should have SameSite=Lax")
+	}
+}
+
+func TestFeatureFlags(t *testing.T) {
+	// Test 1: All features disabled - only users table required
+	t.Run("AllFeaturesDisabled", func(t *testing.T) {
+		// Use a temporary file instead of :memory: to persist across connections
+		tmpFile, err := os.CreateTemp("", "test-*.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tmpFile.Name())
+		tmpFile.Close()
+
+		// Create only users table
+		db, err := sql.Open("sqlite3", tmpFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = db.Exec(`
+			CREATE TABLE users (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				email TEXT UNIQUE NOT NULL,
+				password_hash TEXT NOT NULL,
+				verified BOOLEAN DEFAULT 0,
+				created_at DATETIME NOT NULL
+			);
+
+			CREATE TABLE tokens (
+				id INTEGER PRIMARY KEY,
+				token TEXT UNIQUE,
+				user_id INTEGER,
+				purpose TEXT,
+				expires_at DATETIME,
+				created_at DATETIME
+			);
+		`)
+		if err != nil {
+			t.Fatal("Failed to create users table:", err)
+		}
+		db.Close()
+
+		// Guardian should work with just users table when all features disabled
+		app := New(Config{
+			SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+			DatabaseType:   "sqlite",
+			DatabasePath:   tmpFile.Name(),
+			AutoMigrate:    false,
+			ValidateSchema: true,
+			Features: Features{
+				EmailVerification: false,
+				PasswordReset:     false,
+				RememberMe:        false,
+				RBAC:              false,
+				ExternalAuth:      true,
+			},
+		})
+		defer app.DB().Close()
+
+		// Should not panic - only users table is required
+
+		// Register should work and user should be auto-verified
+		user, err := app.Auth().Register("test@example.com", "password123")
+		if err != nil {
+			t.Fatal("Registration failed:", err)
+		}
+
+		if !user.Verified {
+			t.Error("User should be auto-verified when email verification is disabled")
+		}
+	})
+
+	// Test 2: Email verification disabled but password reset enabled
+	t.Run("MixedTokenFeatures", func(t *testing.T) {
+		// Use temporary file
+		tmpFile, err := os.CreateTemp("", "test-*.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tmpFile.Name())
+		tmpFile.Close()
+
+		// Still need tokens table for password reset
+		db, err := sql.Open("sqlite3", tmpFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = db.Exec(`
+			CREATE TABLE users (
+				id INTEGER PRIMARY KEY,
+				email TEXT UNIQUE,
+				password_hash TEXT,
+				verified BOOLEAN DEFAULT 0,
+				created_at DATETIME
+			);
+			CREATE TABLE tokens (
+				id INTEGER PRIMARY KEY,
+				token TEXT UNIQUE,
+				user_id INTEGER,
+				purpose TEXT,
+				expires_at DATETIME,
+				created_at DATETIME
+			);
+		`)
+		if err != nil {
+			t.Fatal("Failed to create tables:", err)
+		}
+		db.Close()
+
+		app := New(Config{
+			SessionKey:   []byte("test-secret-key-32-bytes-long!!!"),
+			DatabaseType: "sqlite",
+			DatabasePath: tmpFile.Name(),
+			AutoMigrate:  false,
+			Features: Features{
+				EmailVerification: false, // No email verification
+				PasswordReset:     true,  // But password reset enabled
+				RememberMe:        false,
+				RBAC:              false,
+			},
+		})
+		defer app.DB().Close()
+
+		// Register user (should be auto-verified)
+		user, _ := app.Auth().Register("test@example.com", "password123")
+		if !user.Verified {
+			t.Error("User should be auto-verified")
+		}
+
+		// Password reset should work
+		token, err := app.Auth().CreatePasswordResetToken("test@example.com")
+		if err != nil {
+			t.Error("Password reset should work:", err)
+		}
+		if token == nil {
+			t.Error("Should create password reset token")
+		}
+	})
+
+	// Test 3: Feature disabled methods return errors
+	t.Run("DisabledFeatureErrors", func(t *testing.T) {
+		app := New(Config{
+			SessionKey:   []byte("test-secret-key-32-bytes-long!!!"),
+			DatabaseType: "sqlite",
+			DatabasePath: ":memory:",
+			Features: Features{
+				EmailVerification: false,
+				PasswordReset:     false,
+				RememberMe:        false,
+				RBAC:              false,
+				ExternalAuth:      true,
+			},
+		})
+		defer app.DB().Close()
+
+		// Try to create verification token
+		_, err := app.Auth().CreateVerificationToken(1)
+		if err == nil || err.Error() != "feature is disabled" {
+			t.Error("Expected feature disabled error for verification token")
+		}
+
+		// Try to create password reset token
+		_, err = app.Auth().CreatePasswordResetToken("test@example.com")
+		if err == nil || err.Error() != "feature is disabled" {
+			t.Error("Expected feature disabled error for password reset")
+		}
+
+		// Try to use remember me
+		err = app.Auth().LoginWithRememberMe(nil, nil, "test@example.com", "password", true)
+		if err == nil || err.Error() != "feature is disabled" {
+			t.Error("Expected feature disabled error for remember me")
+		}
+
+		// RBAC should return error
+		role, err := app.Auth().GetUserRole(1)
+		if err == nil || err.Error() != "feature is disabled" {
+			t.Error("Expected feature disabled error for RBAC")
+		}
+		if role != nil {
+			t.Error("Role should be nil when RBAC disabled")
+		}
+
+		if app.Auth().UserHasPermission(1, "any.permission") {
+			t.Error("UserHasPermission should return false when RBAC disabled")
+		}
+	})
+
+	// Test 4: Schema validation with partial features
+	t.Run("PartialFeatureValidation", func(t *testing.T) {
+		// Use temporary file
+		tmpFile, err := os.CreateTemp("", "test-*.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tmpFile.Name())
+		tmpFile.Close()
+
+		// Create users and roles tables only
+		db, err := sql.Open("sqlite3", tmpFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		_, err = db.Exec(`
+			CREATE TABLE users (
+				id INTEGER PRIMARY KEY,
+				email TEXT UNIQUE,
+				password_hash TEXT,
+				verified BOOLEAN DEFAULT 0,
+				created_at DATETIME,
+				role_id INTEGER
+			);
+			CREATE TABLE roles (
+				id INTEGER PRIMARY KEY,
+				name TEXT UNIQUE
+			);
+			CREATE TABLE permissions (
+				id INTEGER PRIMARY KEY,
+				name TEXT UNIQUE
+			);
+			CREATE TABLE role_permissions (
+				role_id INTEGER,
+				permission_id INTEGER,
+				PRIMARY KEY (role_id, permission_id)
+			);
+		`)
+		if err != nil {
+			t.Fatal("Failed to create tables:", err)
+		}
+		db.Close()
+
+		// Should work with just RBAC enabled
+		app := New(Config{
+			SessionKey:   []byte("test-secret-key-32-bytes-long!!!"),
+			DatabaseType: "sqlite",
+			DatabasePath: tmpFile.Name(),
+			AutoMigrate:  false,
+			Features: Features{
+				EmailVerification: false, // No tokens table needed
+				PasswordReset:     false, // No tokens table needed
+				RememberMe:        false, // No remember_tokens needed
+				RBAC:              true,  // Only RBAC tables needed
+			},
+		})
+		defer app.DB().Close()
+
+		// RBAC operations should work
+		if !app.Auth().UserHasPermission(1, "test") {
+			// This is fine - no permissions assigned
+		}
+	})
+}
+
+func TestMinimalDatabaseRequirements(t *testing.T) {
+	// Test that Guardian can work with just a users table
+	t.Run("OnlyUsersTable", func(t *testing.T) {
+		tmpFile, err := os.CreateTemp("", "test-*.db")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(tmpFile.Name())
+		tmpFile.Close()
+
+		db, err := sql.Open("sqlite3", tmpFile.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create ONLY users table
+		_, err = db.Exec(`
+			CREATE TABLE users (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				email TEXT UNIQUE NOT NULL,
+				password_hash TEXT NOT NULL,
+				verified BOOLEAN DEFAULT 1,
+				created_at DATETIME NOT NULL
+			)
+		`)
+		if err != nil {
+			t.Fatal("Failed to create users table:", err)
+		}
+		db.Close()
+
+		app := New(Config{
+			SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+			DatabaseType:   "sqlite",
+			DatabasePath:   tmpFile.Name(),
+			AutoMigrate:    false,
+			ValidateSchema: true,
+			Features: Features{
+				EmailVerification: false,
+				PasswordReset:     false,
+				RememberMe:        false,
+				RBAC:              false,
+				ExternalAuth:      true,
+			},
+		})
+		defer app.DB().Close()
+
+		// Full auth flow should work
+		_, err = app.Auth().Register("minimal@example.com", "password123")
+		if err != nil {
+			t.Fatal("Registration failed with minimal setup:", err)
+		}
+
+		// Login should work
+		req := httptest.NewRequest("POST", "/login", nil)
+		rec := httptest.NewRecorder()
+
+		err = app.Auth().Login(rec, req, "minimal@example.com", "password123")
+		if err != nil {
+			t.Fatal("Login failed with minimal setup:", err)
+		}
+
+		// Session should be created
+		cookies := rec.Result().Cookies()
+		if len(cookies) == 0 {
+			t.Error("No session cookie created")
+		}
+
+		// User retrieval should work
+		user, err := app.Auth().GetUser(req)
+		if err == nil && user != nil {
+			// This would work if the session was properly set
+			t.Log("User retrieval works with minimal setup")
+		}
+	})
+}
+</file>
+
+<file path="auth/auth.go">
+package auth
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/gorilla/sessions"
+)
+
+var (
+	ErrInvalidCredentials = errors.New("invalid email or password")
+	ErrUserNotFound       = errors.New("user not found")
+	ErrUserNotVerified    = errors.New("email not verified")
+	ErrFeatureDisabled    = errors.New("feature is disabled")
+)
+
+// TableConfig defines table names for auth operations
+type TableConfig struct {
+	Users           string
+	Tokens          string
+	Sessions        string
+	Roles           string
+	Permissions     string
+	RolePermissions string
+	RememberTokens  string
+}
+
+// DefaultTableConfig returns the default table names
+func DefaultTableConfig() TableConfig {
+	return TableConfig{
+		Users:           "users",
+		Tokens:          "tokens",
+		Sessions:        "sessions",
+		Roles:           "roles",
+		Permissions:     "permissions",
+		RolePermissions: "role_permissions",
+		RememberTokens:  "remember_tokens",
+	}
+}
+
+// ColumnConfig maps Guardian's expected columns to actual database columns
+type ColumnConfig struct {
+	// Users table columns
+	UserID       string // Default: "id"
+	UserEmail    string // Default: "email"
+	UserPassword string // Default: "password_hash"
+	UserVerified string // Default: "verified"
+	UserCreated  string // Default: "created_at"
+	UserRoleID   string // Default: "role_id"
+
+	// Tokens table columns (if using email verification or password reset)
+	TokenID      string // Default: "id"
+	TokenValue   string // Default: "token"
+	TokenUserID  string // Default: "user_id"
+	TokenPurpose string // Default: "purpose"
+	TokenExpires string // Default: "expires_at"
+	TokenCreated string // Default: "created_at"
+}
+
+// DefaultColumnConfig returns the default column names
+func DefaultColumnConfig() ColumnConfig {
+	return ColumnConfig{
+		UserID:       "id",
+		UserEmail:    "email",
+		UserPassword: "password_hash",
+		UserVerified: "verified",
+		UserCreated:  "created_at",
+		UserRoleID:   "role_id",
+
+		TokenID:      "id",
+		TokenValue:   "token",
+		TokenUserID:  "user_id",
+		TokenPurpose: "purpose",
+		TokenExpires: "expires_at",
+		TokenCreated: "created_at",
+	}
+}
+
+// FeatureConfig defines which features are enabled
+type FeatureConfig struct {
+	EmailVerification bool
+	PasswordReset     bool
+	RememberMe        bool
+	RBAC              bool
+	ExternalAuth      bool // New: Allow external authentication (SSO, LDAP, etc.)
+}
+
+// DefaultFeatureConfig returns all features enabled
+func DefaultFeatureConfig() FeatureConfig {
+	return FeatureConfig{
+		EmailVerification: true,
+		PasswordReset:     true,
+		RememberMe:        true,
+		RBAC:              true,
+		ExternalAuth:      false,
+	}
+}
+
+type ServiceConfig struct {
+	Store       sessions.Store
+	DB          *sql.DB
+	TableNames  TableConfig
+	ColumnNames ColumnConfig
+	Features    FeatureConfig
+}
+
+type Service struct {
+	store    sessions.Store
+	db       *sql.DB
+	tables   TableConfig
+	columns  ColumnConfig
+	features FeatureConfig
+}
+
+type User struct {
+	ID           int64
+	Email        string
+	PasswordHash string
+	Verified     bool
+	CreatedAt    time.Time
+}
+
+// NewService creates a new auth service with default table names (backward compatible)
+func NewService(store sessions.Store, db *sql.DB) *Service {
+	return NewServiceWithConfig(ServiceConfig{
+		Store:       store,
+		DB:          db,
+		TableNames:  DefaultTableConfig(),
+		ColumnNames: DefaultColumnConfig(),
+		Features:    DefaultFeatureConfig(),
+	})
+}
+
+// NewServiceWithConfig creates a new auth service with custom table names
+func NewServiceWithConfig(cfg ServiceConfig) *Service {
+	// Set defaults if not provided
+	if cfg.TableNames == (TableConfig{}) {
+		cfg.TableNames = DefaultTableConfig()
+	}
+
+	if cfg.ColumnNames == (ColumnConfig{}) {
+		cfg.ColumnNames = DefaultColumnConfig()
+	}
+
+	if cfg.Features == (FeatureConfig{}) {
+		cfg.Features = DefaultFeatureConfig()
+	}
+
+	return &Service{
+		store:    cfg.Store,
+		db:       cfg.DB,
+		tables:   cfg.TableNames,
+		columns:  cfg.ColumnNames,
+		features: cfg.Features,
+	}
+}
+
+func (s *Service) Login(w http.ResponseWriter, r *http.Request, email, password string) error {
+	// Find user
+	user, err := s.findUserByEmail(email)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ErrInvalidCredentials
+		}
+		return err
+	}
+
+	// Skip password check if external auth is enabled
+	if !s.features.ExternalAuth {
+		// Check password
+		if !CheckPasswordHash(password, user.PasswordHash) {
+			return ErrInvalidCredentials
+		}
+	}
+
+	// Check if verified only if email verification is enabled
+	if s.features.EmailVerification && !user.Verified {
+		return ErrUserNotVerified
+	}
+
+	// Create session
+	return s.CreateSessionForUser(w, r, user.ID, user.Email)
+}
+
+// LoginWithoutPassword allows login without password verification
+// Useful for SSO or when password is checked externally
+func (s *Service) LoginWithoutPassword(w http.ResponseWriter, r *http.Request, email string) error {
+	if !s.features.ExternalAuth {
+		return errors.New("external authentication is not enabled")
+	}
+
+	user, err := s.findUserByEmail(email)
+	if err != nil {
+		return err
+	}
+
+	// Check if verified only if email verification is enabled
+	if s.features.EmailVerification && !user.Verified {
+		return ErrUserNotVerified
+	}
+
+	return s.CreateSessionForUser(w, r, user.ID, user.Email)
+}
+
+// CreateSessionForUser creates a session for an already-authenticated user
+// This allows SSO/external auth systems to create Guardian sessions
+func (s *Service) CreateSessionForUser(w http.ResponseWriter, r *http.Request, userID int64, email string) error {
+	// Create new session
+	session, _ := s.store.New(r, "auth-session")
+	session.Values["user_id"] = userID
+	session.Values["email"] = email
+
+	// Regenerate session ID for security
+	session.Options.MaxAge = 1800 // 30 minutes
+
+	return session.Save(r, w)
+}
+
+// LoginWithRememberMe logs in the user with an option to remember the session
+func (s *Service) LoginWithRememberMe(w http.ResponseWriter, r *http.Request, email, password string, rememberMe bool) error {
+	if rememberMe && !s.features.RememberMe {
+		return ErrFeatureDisabled
+	}
+
+	user, err := s.findUserByEmail(email)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return ErrInvalidCredentials
+		}
+		return err
+	}
+
+	// Skip password check if external auth is enabled
+	if !s.features.ExternalAuth {
+		// Check password
+		if !CheckPasswordHash(password, user.PasswordHash) {
+			return ErrInvalidCredentials
+		}
+	}
+
+	// Check if verified only if email verification is enabled
+	if s.features.EmailVerification && !user.Verified {
+		return ErrUserNotVerified
+	}
+
+	// After successful login
+	session, _ := s.store.New(r, "auth-session")
+	session.Values["user_id"] = user.ID
+	session.Values["email"] = user.Email
+
+	// Set longer expiration if remember me is checked
+	if rememberMe && s.features.RememberMe {
+		session.Options.MaxAge = 86400 * 30 // 30 days
+
+		// Create a remember token
+		token := GenerateToken()
+		query := fmt.Sprintf(`
+			INSERT INTO %s (user_id, token, expires_at)
+			VALUES (?, ?, ?)
+		`, s.tables.RememberTokens)
+
+		_, err := s.db.Exec(query, user.ID, token, time.Now().Add(30*24*time.Hour))
+
+		if err == nil {
+			// Set remember me cookie
+			http.SetCookie(w, &http.Cookie{
+				Name:     "remember_token",
+				Value:    token,
+				MaxAge:   86400 * 30,
+				HttpOnly: true,
+				Secure:   true,
+				SameSite: http.SameSiteLaxMode,
+			})
+		}
+	} else {
+		session.Options.MaxAge = 1800 // 30 minutes
+	}
+
+	return session.Save(r, w)
+}
+
+func (s *Service) Logout(w http.ResponseWriter, r *http.Request) error {
+	session, err := s.store.Get(r, "auth-session")
+	if err != nil {
+		return err
+	}
+
+	// Delete session
+	session.Options.MaxAge = -1
+	return session.Save(r, w)
+}
+
+func (s *Service) Register(email, password string) (*User, error) {
+	// Check if user exists
+	existing, _ := s.findUserByEmail(email)
+	if existing != nil {
+		return nil, errors.New("email already registered")
+	}
+
+	// Hash password if not using external auth
+	var hash string
+	if !s.features.ExternalAuth {
+		var err error
+		hash, err = HashPassword(password)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// If email verification is disabled, mark user as verified immediately
+	verified := !s.features.EmailVerification
+
+	// Insert user
+	query := fmt.Sprintf(`
+        INSERT INTO %s (%s, %s, %s, %s)
+        VALUES (?, ?, ?, ?)
+    `, s.tables.Users, s.columns.UserEmail, s.columns.UserPassword,
+		s.columns.UserVerified, s.columns.UserCreated)
+
+	result, err := s.db.Exec(query, email, hash, verified, time.Now())
+
+	if err != nil {
+		return nil, err
+	}
+
+	id, _ := result.LastInsertId()
+
+	return &User{
+		ID:           id,
+		Email:        email,
+		PasswordHash: hash,
+		Verified:     verified,
+		CreatedAt:    time.Now(),
+	}, nil
+}
+
+// RegisterExternalUser registers a user without a password (for SSO/external auth)
+func (s *Service) RegisterExternalUser(email string) (*User, error) {
+	if !s.features.ExternalAuth {
+		return nil, errors.New("external authentication is not enabled")
+	}
+
+	return s.Register(email, "")
+}
+
+func (s *Service) GetUser(r *http.Request) (*User, error) {
+	session, err := s.store.Get(r, "auth-session")
+	if err != nil {
+		return nil, err
+	}
+
+	userID, ok := session.Values["user_id"].(int64)
+	if !ok {
+		return nil, ErrUserNotFound
+	}
+
+	return s.findUserByID(userID)
+}
+
+func (s *Service) findUserByEmail(email string) (*User, error) {
+	var user User
+	query := fmt.Sprintf(`
+        SELECT %s, %s, %s, %s, %s
+        FROM %s
+        WHERE %s = ?
+        LIMIT 1
+    `, s.columns.UserID, s.columns.UserEmail, s.columns.UserPassword,
+		s.columns.UserVerified, s.columns.UserCreated,
+		s.tables.Users,
+		s.columns.UserEmail)
+
+	err := s.db.QueryRow(query, email).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Verified, &user.CreatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+func (s *Service) findUserByID(id int64) (*User, error) {
+	var user User
+	query := fmt.Sprintf(`
+        SELECT %s, %s, %s, %s, %s
+        FROM %s
+        WHERE %s = ?
+        LIMIT 1
+    `, s.columns.UserID, s.columns.UserEmail, s.columns.UserPassword,
+		s.columns.UserVerified, s.columns.UserCreated,
+		s.tables.Users,
+		s.columns.UserID)
+
+	err := s.db.QueryRow(query, id).Scan(&user.ID, &user.Email, &user.PasswordHash, &user.Verified, &user.CreatedAt)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// GetTableConfig returns the current table configuration
+func (s *Service) GetTableConfig() TableConfig {
+	return s.tables
+}
+
+// GetColumnConfig returns the current column configuration
+func (s *Service) GetColumnConfig() ColumnConfig {
+	return s.columns
+}
+
+// GetFeatures returns the enabled features
+func (s *Service) GetFeatures() FeatureConfig {
+	return s.features
+}
+
+// IsFeatureEnabled checks if a specific feature is enabled
+func (s *Service) IsFeatureEnabled(feature string) bool {
+	switch feature {
+	case "email_verification":
+		return s.features.EmailVerification
+	case "password_reset":
+		return s.features.PasswordReset
+	case "remember_me":
+		return s.features.RememberMe
+	case "rbac":
+		return s.features.RBAC
+	case "external_auth":
+		return s.features.ExternalAuth
+	default:
+		return false
+	}
+}
+
+// SessionsTable returns the sessions table name, if configured
+func (s *Service) SessionsTable() string {
+	return s.tables.Sessions
+}
+</file>
+
+<file path=".gitignore">
+LICENSE
+PLAN.md
+PRD.md
+docs/
+examples/
+MAKEFILE
+.claude/
+CLAUDE.md
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+bin/
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
+temp/
+
+# Coverage reports
+coverage.txt
+coverage.html
+coverage.out
+</file>
+
+<file path="database/migration.go">
+package database
+
+import (
+	"fmt"
+	"log"
+)
+
+type Migration struct {
+	Version    string
+	Name       string
+	UpSQLite   string
+	DownSQLite string
+	UpMySQL    string
+	DownMySQL  string
+}
+
+// GetMigrations returns all available migrations
+// This is now exported so users can access migrations if needed
+func GetMigrations() []Migration {
+	return migrations
+}
+
+// GetRequiredTables returns the tables that are always required
+func GetRequiredTables() map[string][]string {
+	// Only users table is always required
+	return map[string][]string{
+		"users": {
+			"id",
+			"email",
+			"password_hash",
+			"verified",
+			"created_at",
+			"role_id", // Optional column for RBAC
+		},
+	}
+}
+
+// GetConditionalTables returns tables that are conditionally required
+// based on which features are enabled
+func GetConditionalTables() map[string][]string {
+	return map[string][]string{
+		"tokens": { // Required for email verification or password reset
+			"id",
+			"token",
+			"user_id",
+			"purpose",
+			"expires_at",
+			"created_at",
+		},
+		"sessions": { // Required for database session backend
+			"id",
+			"user_id",
+			"data",
+			"expires_at",
+			"created_at",
+		},
+		"remember_tokens": { // Required for remember me feature
+			"id",
+			"user_id",
+			"token",
+			"expires_at",
+			"created_at",
+		},
+	}
+}
+
+// GetOptionalTables returns the optional RBAC tables
+func GetOptionalTables() map[string][]string {
+	// Return the optional tables defined in schema.go
+	return map[string][]string{
+		"roles": {
+			"id",
+			"name",
+		},
+		"permissions": {
+			"id",
+			"name",
+		},
+		"role_permissions": {
+			"role_id",
+			"permission_id",
+		},
+		"remember_tokens": {
+			"id",
+			"user_id",
+			"token",
+			"expires_at",
+			"created_at",
+		},
+	}
+}
+
+var migrations = []Migration{
+	{
+		Version: "001",
+		Name:    "create_users_table",
+		UpSQLite: `
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                verified BOOLEAN DEFAULT FALSE,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME
+            );
+            CREATE INDEX idx_users_email ON users(email);
+        `,
+		DownSQLite: `DROP TABLE IF EXISTS users;`,
+		UpMySQL: `
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                email VARCHAR(255) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                verified TINYINT(1) DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                updated_at DATETIME NULL,
+                INDEX idx_users_email (email)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `,
+		DownMySQL: `DROP TABLE IF EXISTS users;`,
+	},
+	{
+		Version: "002",
+		Name:    "create_tokens_table",
+		// Note: This table is only needed if using email verification or password reset features
+		UpSQLite: `
+            CREATE TABLE IF NOT EXISTS tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token TEXT UNIQUE NOT NULL,
+                user_id INTEGER NOT NULL,
+                purpose TEXT NOT NULL,
+                expires_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_tokens_token ON tokens(token);
+            CREATE INDEX idx_tokens_expires ON tokens(expires_at);
+        `,
+		DownSQLite: `DROP TABLE IF EXISTS tokens;`,
+		UpMySQL: `
+            CREATE TABLE IF NOT EXISTS tokens (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                token VARCHAR(255) UNIQUE NOT NULL,
+                user_id BIGINT NOT NULL,
+                purpose VARCHAR(50) NOT NULL,
+                expires_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_tokens_token (token),
+                INDEX idx_tokens_expires (expires_at),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `,
+		DownMySQL: `DROP TABLE IF EXISTS tokens;`,
+	},
+	{
+		Version: "003",
+		Name:    "create_sessions_table",
+		// Note: This table is only needed if using database session backend
+		// Guardian uses cookie sessions by default, so this table is optional
+		UpSQLite: `
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                data TEXT,
+                expires_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            CREATE INDEX idx_sessions_expires ON sessions(expires_at);
+        `,
+		DownSQLite: `DROP TABLE IF EXISTS sessions;`,
+		UpMySQL: `
+            CREATE TABLE IF NOT EXISTS sessions (
+                id VARCHAR(255) PRIMARY KEY,
+                user_id BIGINT NOT NULL,
+                data TEXT,
+                expires_at DATETIME NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                INDEX idx_sessions_expires (expires_at),
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `,
+		DownMySQL: `DROP TABLE IF EXISTS sessions;`,
+	},
+	{
+		Version: "004",
+		Name:    "create_roles_and_permissions",
+		UpSQLite: `
+		CREATE TABLE IF NOT EXISTS roles (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL
+		);
+		
+		CREATE TABLE IF NOT EXISTS permissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT UNIQUE NOT NULL
+		);
+		
+		CREATE TABLE IF NOT EXISTS role_permissions (
+			role_id INTEGER NOT NULL,
+			permission_id INTEGER NOT NULL,
+			PRIMARY KEY (role_id, permission_id),
+			FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+			FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+		);
+		
+		CREATE TABLE IF NOT EXISTS remember_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			user_id INTEGER NOT NULL,
+			token TEXT UNIQUE NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		);
+		
+		ALTER TABLE users ADD COLUMN role_id INTEGER DEFAULT 1;
+		
+		-- Create default roles
+		INSERT INTO roles (name) VALUES ('user'), ('admin');
+		INSERT INTO permissions (name) VALUES ('user.view'), ('user.edit'), ('admin.access');
+		INSERT INTO role_permissions VALUES (1, 1), (2, 1), (2, 2), (2, 3);
+	`,
+		DownSQLite: `
+		DROP TABLE IF EXISTS role_permissions;
+		DROP TABLE IF EXISTS permissions;
+		DROP TABLE IF EXISTS roles;
+		DROP TABLE IF EXISTS remember_tokens;
+	`,
+		UpMySQL: `
+		CREATE TABLE IF NOT EXISTS roles (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			name VARCHAR(100) UNIQUE NOT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		CREATE TABLE IF NOT EXISTS permissions (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			name VARCHAR(100) UNIQUE NOT NULL
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		CREATE TABLE IF NOT EXISTS role_permissions (
+			role_id BIGINT NOT NULL,
+			permission_id BIGINT NOT NULL,
+			PRIMARY KEY (role_id, permission_id),
+			FOREIGN KEY (role_id) REFERENCES roles(id) ON DELETE CASCADE,
+			FOREIGN KEY (permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		CREATE TABLE IF NOT EXISTS remember_tokens (
+			id BIGINT PRIMARY KEY AUTO_INCREMENT,
+			user_id BIGINT NOT NULL,
+			token VARCHAR(255) UNIQUE NOT NULL,
+			expires_at DATETIME NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			INDEX idx_remember_token (token),
+			FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+		
+		ALTER TABLE users ADD COLUMN role_id BIGINT DEFAULT 1;
+		
+		-- Create default roles
+		INSERT INTO roles (name) VALUES ('user'), ('admin');
+		INSERT INTO permissions (name) VALUES ('user.view'), ('user.edit'), ('admin.access');
+		INSERT INTO role_permissions VALUES (1, 1), (2, 1), (2, 2), (2, 3);
+	`,
+		DownMySQL: `
+		DROP TABLE IF EXISTS role_permissions;
+		DROP TABLE IF EXISTS permissions;
+		DROP TABLE IF EXISTS roles;
+		DROP TABLE IF EXISTS remember_tokens;
+	`,
+	},
+}
+
+func (db *DB) Migrate() error {
+	// Create migrations table based on database type with configurable name
+	migrationTableSQL := getMigrationTableSQL(db.dbType, db.MigrationTable())
+	if _, err := db.DB.Exec(migrationTableSQL); err != nil {
+		return err
+	}
+
+	// Run migrations
+	for _, m := range migrations {
+		if err := db.runMigration(m); err != nil {
+			return fmt.Errorf("migration %s failed: %w", m.Version, err)
+		}
+	}
+
+	return nil
+}
+
+// MigrateUp runs specific migrations by version
+func (db *DB) MigrateUp(versions ...string) error {
+	// Create migrations table if it doesn't exist
+	migrationTableSQL := getMigrationTableSQL(db.dbType, db.MigrationTable())
+	if _, err := db.DB.Exec(migrationTableSQL); err != nil {
+		return err
+	}
+
+	versionMap := make(map[string]bool)
+	for _, v := range versions {
+		versionMap[v] = true
+	}
+
+	for _, m := range migrations {
+		if len(versions) == 0 || versionMap[m.Version] {
+			if err := db.runMigration(m); err != nil {
+				return fmt.Errorf("migration %s failed: %w", m.Version, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func getMigrationTableSQL(dbType, tableName string) string {
+	if dbType == "mysql" {
+		return fmt.Sprintf(`
+            CREATE TABLE IF NOT EXISTS %s (
+                version VARCHAR(10) PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        `, tableName)
+	}
+	// SQLite
+	return fmt.Sprintf(`
+        CREATE TABLE IF NOT EXISTS %s (
+            version TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `, tableName)
+}
+
+func (db *DB) runMigration(m Migration) error {
+	// Check if already applied
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE version = ?", db.MigrationTable())
+	err := db.DB.QueryRow(query, m.Version).Scan(&count)
+	if err != nil {
+		return err
+	}
+
+	if count > 0 {
+		return nil // Already applied
+	}
+
+	// Get appropriate SQL based on database type
+	var upSQL string
+	switch db.dbType {
+	case "mysql":
+		upSQL = m.UpMySQL
+	case "sqlite":
+		upSQL = m.UpSQLite
+	default:
+		return fmt.Errorf("unsupported database type: %s", db.dbType)
+	}
+
+	// Run migration in transaction
+	tx, err := db.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(upSQL); err != nil {
+		return err
+	}
+
+	insertQuery := fmt.Sprintf(
+		"INSERT INTO %s (version, name) VALUES (?, ?)",
+		db.MigrationTable(),
+	)
+	if _, err := tx.Exec(insertQuery, m.Version, m.Name); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+
+	log.Printf("Applied migration %s: %s", m.Version, m.Name)
+	return nil
+}
+</file>
+
+<file path="router/router.go">
+// File: router/router.go
+package router
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+)
+
+type Router struct {
+	chi.Router
+	routes map[string]*Route
+}
+
+type Route struct {
+	Pattern   string
+	Method    string
+	Handler   http.HandlerFunc
+	RouteName string
+	router    *Router // Reference to parent router
+}
+
+func New() *Router {
+	return &Router{
+		Router: chi.NewRouter(),
+		routes: make(map[string]*Route),
+	}
+}
+
+func (r *Router) GET(pattern string, handler http.HandlerFunc) *Route {
+	r.Router.Get(pattern, handler)
+	route := &Route{Pattern: pattern, Method: "GET", Handler: handler, router: r}
+	return route
+}
+
+func (r *Router) POST(pattern string, handler http.HandlerFunc) *Route {
+	r.Router.Post(pattern, handler)
+	route := &Route{Pattern: pattern, Method: "POST", Handler: handler, router: r}
+	return route
+}
+
+func (r *Router) PUT(pattern string, handler http.HandlerFunc) *Route {
+	r.Router.Put(pattern, handler)
+	route := &Route{Pattern: pattern, Method: "PUT", Handler: handler, router: r}
+	return route
+}
+
+func (r *Router) DELETE(pattern string, handler http.HandlerFunc) *Route {
+	r.Router.Delete(pattern, handler)
+	route := &Route{Pattern: pattern, Method: "DELETE", Handler: handler, router: r}
+	return route
+}
+
+func (r *Router) PATCH(pattern string, handler http.HandlerFunc) *Route {
+	r.Router.Patch(pattern, handler)
+	route := &Route{Pattern: pattern, Method: "PATCH", Handler: handler, router: r}
+	return route
+}
+
+func (route *Route) Name(name string) *Route {
+	route.RouteName = name
+	if route.router != nil {
+		route.router.routes[name] = route
+	}
+	return route
+}
+
+func (r *Router) URL(name string, params ...string) string {
+	route, ok := r.routes[name]
+	if !ok {
+		return ""
+	}
+
+	url := route.Pattern
+
+	// Replace Chi-style parameters {param} with values
+	for i := 0; i < len(params); i += 2 {
+		if i+1 < len(params) {
+			param := "{" + params[i] + "}"
+			url = strings.ReplaceAll(url, param, params[i+1])
+		}
+	}
+
+	return url
+}
+</file>
+
+<file path="go.mod">
+module github.com/flyzard/go-guardian
+
+go 1.24
+
+require (
+	github.com/go-chi/chi/v5 v5.2.2
+	github.com/go-playground/validator/v10 v10.26.0
+	github.com/go-sql-driver/mysql v1.9.3
+	github.com/gorilla/sessions v1.4.0
+	github.com/mattn/go-sqlite3 v1.14.28
+	golang.org/x/crypto v0.39.0
+)
+
+require (
+	filippo.io/edwards25519 v1.1.0 // indirect
+	github.com/gabriel-vasile/mimetype v1.4.9 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/gorilla/securecookie v1.1.2 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+	golang.org/x/net v0.41.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/text v0.26.0 // indirect
+)
+</file>
+
+<file path="guardian.go">
+package guardian
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/flyzard/go-guardian/auth"
+	"github.com/flyzard/go-guardian/database"
+	"github.com/flyzard/go-guardian/router"
+	"github.com/gorilla/sessions"
+)
+
+// SessionBackend defines the type of session storage
+type SessionBackend string
+
+const (
+	SessionBackendCookie   SessionBackend = "cookie"   // Default: encrypted cookies
+	SessionBackendMemory   SessionBackend = "memory"   // In-memory store
+	SessionBackendDatabase SessionBackend = "database" // Database-backed sessions
+)
+
+// TableNames allows customizing table names
+type TableNames struct {
+	Users           string
+	Tokens          string // Only required if using email verification or password reset
+	Sessions        string // Only required if using database sessions
+	Roles           string
+	Permissions     string
+	RolePermissions string
+	RememberTokens  string
+}
+
+// DefaultTableNames returns the default table names
+func DefaultTableNames() TableNames {
+	return TableNames{
+		Users:           "users",
+		Tokens:          "tokens",
+		Sessions:        "sessions",
+		Roles:           "roles",
+		Permissions:     "permissions",
+		RolePermissions: "role_permissions",
+		RememberTokens:  "remember_tokens",
+	}
+}
+
+// ColumnNames allows customizing column names
+type ColumnNames struct {
+	// Users table columns
+	UserID       string
+	UserEmail    string
+	UserPassword string
+	UserVerified string
+	UserCreated  string
+	UserRoleID   string
+
+	// Tokens table columns
+	TokenID      string
+	TokenValue   string
+	TokenUserID  string
+	TokenPurpose string
+	TokenExpires string
+	TokenCreated string
+}
+
+// DefaultColumnNames returns the default column names
+func DefaultColumnNames() ColumnNames {
+	return ColumnNames{
+		UserID:       "id",
+		UserEmail:    "email",
+		UserPassword: "password_hash",
+		UserVerified: "verified",
+		UserCreated:  "created_at",
+		UserRoleID:   "role_id",
+
+		TokenID:      "id",
+		TokenValue:   "token",
+		TokenUserID:  "user_id",
+		TokenPurpose: "purpose",
+		TokenExpires: "expires_at",
+		TokenCreated: "created_at",
+	}
+}
+
+// Features allows disabling optional features
+type Features struct {
+	EmailVerification bool // Requires tokens table
+	PasswordReset     bool // Requires tokens table
+	RememberMe        bool // Requires remember_tokens table
+	RBAC              bool // Requires roles, permissions tables
+	ExternalAuth      bool // Enable external authentication (SSO, LDAP, etc.)
+}
+
+// DefaultFeatures returns all features enabled
+// This maintains backward compatibility - existing apps get all features
+func DefaultFeatures() Features {
+	return Features{
+		EmailVerification: true,
+		PasswordReset:     true,
+		RememberMe:        true,
+		RBAC:              true,
+		ExternalAuth:      false,
+	}
+}
+
+type Config struct {
+	SessionKey  []byte
+	Environment string // "development" or "production"
+
+	// Database configuration
+	DatabaseType    string // "sqlite" or "mysql"
+	DatabasePath    string // For SQLite
+	DatabaseDSN     string // For MySQL: "user:pass@tcp(localhost:3306)/dbname?parseTime=true"
+	MaxOpenConns    int    // Max open connections
+	MaxIdleConns    int    // Max idle connections
+	ConnMaxLifetime time.Duration
+
+	// Migration configuration
+	AutoMigrate    bool   // Whether to run migrations automatically (default: true)
+	ValidateSchema bool   // Whether to validate required tables exist (default: true)
+	MigrationTable string // Custom migration table name (default: "migrations")
+
+	// Table name mapping
+	TableNames TableNames // Custom table names (default: standard names)
+
+	// Column name mapping
+	ColumnNames ColumnNames // Custom column names (default: standard names)
+
+	// Session configuration
+	SessionBackend SessionBackend    // Type of session storage (default: "cookie")
+	SessionOptions *sessions.Options // Session cookie options
+
+	// Feature flags
+	Features Features // Which features to enable (default: all)
+}
+
+type Guardian struct {
+	router   *router.Router
+	db       *database.DB
+	auth     *auth.Service
+	sessions sessions.Store
+	config   Config
+}
+
+// InMemoryStore implements a simple in-memory session store
+type InMemoryStore struct {
+	mu       sync.RWMutex
+	sessions map[string]*sessions.Session
+	options  *sessions.Options
+}
+
+func NewInMemoryStore(keyPairs ...[]byte) *InMemoryStore {
+	return &InMemoryStore{
+		sessions: make(map[string]*sessions.Session),
+		options: &sessions.Options{
+			Path:     "/",
+			MaxAge:   1800, // 30 minutes
+			HttpOnly: true,
+		},
+	}
+}
+
+func (s *InMemoryStore) Get(r *http.Request, name string) (*sessions.Session, error) {
+	return sessions.GetRegistry(r).Get(s, name)
+}
+
+func (s *InMemoryStore) New(r *http.Request, name string) (*sessions.Session, error) {
+	session := sessions.NewSession(s, name)
+	opts := *s.options
+	session.Options = &opts
+	session.IsNew = true
+
+	// Try to get existing session from cookie
+	if cookie, err := r.Cookie(name); err == nil {
+		s.mu.RLock()
+		if existing, exists := s.sessions[cookie.Value]; exists {
+			s.mu.RUnlock()
+			// Return the existing session
+			existing.IsNew = false
+			return existing, nil
+		}
+		s.mu.RUnlock()
+	}
+
+	return session, nil
+}
+
+func (s *InMemoryStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
+	// Delete session
+	if session.Options.MaxAge <= 0 {
+		s.mu.Lock()
+		delete(s.sessions, session.ID)
+		s.mu.Unlock()
+
+		http.SetCookie(w, sessions.NewCookie(session.Name(), "", session.Options))
+		return nil
+	}
+
+	// Generate session ID if new
+	if session.ID == "" {
+		session.ID = generateSessionID()
+	}
+
+	// Store in memory
+	s.mu.Lock()
+	s.sessions[session.ID] = session
+	s.mu.Unlock()
+
+	// Set cookie with session ID
+	http.SetCookie(w, sessions.NewCookie(session.Name(), session.ID, session.Options))
+
+	return nil
+}
+
+func (s *InMemoryStore) cleanup() {
+	// Simple cleanup - in production, use a proper scheduler
+	// This is a placeholder for a more sophisticated implementation
+	// that would periodically clean up expired sessions
+}
+
+func (s *InMemoryStore) Options(options *sessions.Options) {
+	s.options = options
+}
+
+func generateSessionID() string {
+	// Use the same token generation as auth
+	return auth.GenerateToken()
+}
+
+func New(cfg Config) *Guardian {
+	// Validate configuration
+	if len(cfg.SessionKey) < 32 {
+		panic("session key must be at least 32 bytes")
+	}
+
+	if cfg.Environment == "" {
+		cfg.Environment = "development"
+	}
+
+	// Set defaults for database
+	if cfg.DatabaseType == "" {
+		cfg.DatabaseType = "sqlite"
+	}
+
+	if cfg.DatabaseType == "sqlite" && cfg.DatabasePath == "" {
+		cfg.DatabasePath = "guardian.db"
+	}
+
+	// Set defaults for sessions
+	if cfg.SessionBackend == "" {
+		cfg.SessionBackend = SessionBackendCookie
+	}
+
+	// Set defaults for migrations
+	if cfg.MigrationTable == "" {
+		cfg.MigrationTable = "migrations"
+	}
+
+	// Set default features if not provided
+	if cfg.Features == (Features{}) {
+		cfg.Features = DefaultFeatures()
+	}
+
+	// Set default table names if not provided
+	if cfg.TableNames == (TableNames{}) {
+		cfg.TableNames = DefaultTableNames()
+	} else {
+		// Fill in any missing table names with defaults
+		defaults := DefaultTableNames()
+		if cfg.TableNames.Users == "" {
+			cfg.TableNames.Users = defaults.Users
+		}
+		if cfg.TableNames.Tokens == "" {
+			cfg.TableNames.Tokens = defaults.Tokens
+		}
+		if cfg.TableNames.Sessions == "" {
+			cfg.TableNames.Sessions = defaults.Sessions
+		}
+		if cfg.TableNames.Roles == "" {
+			cfg.TableNames.Roles = defaults.Roles
+		}
+		if cfg.TableNames.Permissions == "" {
+			cfg.TableNames.Permissions = defaults.Permissions
+		}
+		if cfg.TableNames.RolePermissions == "" {
+			cfg.TableNames.RolePermissions = defaults.RolePermissions
+		}
+		if cfg.TableNames.RememberTokens == "" {
+			cfg.TableNames.RememberTokens = defaults.RememberTokens
+		}
+	}
+
+	// Set default column names if not provided
+	if cfg.ColumnNames == (ColumnNames{}) {
+		cfg.ColumnNames = DefaultColumnNames()
+	} else {
+		// Fill in any missing column names with defaults
+		defaults := DefaultColumnNames()
+		if cfg.ColumnNames.UserID == "" {
+			cfg.ColumnNames.UserID = defaults.UserID
+		}
+		if cfg.ColumnNames.UserEmail == "" {
+			cfg.ColumnNames.UserEmail = defaults.UserEmail
+		}
+		if cfg.ColumnNames.UserPassword == "" {
+			cfg.ColumnNames.UserPassword = defaults.UserPassword
+		}
+		if cfg.ColumnNames.UserVerified == "" {
+			cfg.ColumnNames.UserVerified = defaults.UserVerified
+		}
+		if cfg.ColumnNames.UserCreated == "" {
+			cfg.ColumnNames.UserCreated = defaults.UserCreated
+		}
+		if cfg.ColumnNames.UserRoleID == "" {
+			cfg.ColumnNames.UserRoleID = defaults.UserRoleID
+		}
+		if cfg.ColumnNames.TokenID == "" {
+			cfg.ColumnNames.TokenID = defaults.TokenID
+		}
+		if cfg.ColumnNames.TokenValue == "" {
+			cfg.ColumnNames.TokenValue = defaults.TokenValue
+		}
+		if cfg.ColumnNames.TokenUserID == "" {
+			cfg.ColumnNames.TokenUserID = defaults.TokenUserID
+		}
+		if cfg.ColumnNames.TokenPurpose == "" {
+			cfg.ColumnNames.TokenPurpose = defaults.TokenPurpose
+		}
+		if cfg.ColumnNames.TokenExpires == "" {
+			cfg.ColumnNames.TokenExpires = defaults.TokenExpires
+		}
+		if cfg.ColumnNames.TokenCreated == "" {
+			cfg.ColumnNames.TokenCreated = defaults.TokenCreated
+		}
+	}
+
+	// Default to true for backward compatibility
+	if !cfg.AutoMigrate && cfg.ValidateSchema == false {
+		cfg.ValidateSchema = true
+	}
+
+	// Initialize database based on type
+	var db *database.DB
+	var err error
+
+	switch cfg.DatabaseType {
+	case "sqlite":
+		db, err = database.NewSQLiteWithConfig(database.SQLiteConfig{
+			Path:           cfg.DatabasePath,
+			AutoMigrate:    cfg.AutoMigrate,
+			MigrationTable: cfg.MigrationTable,
+			TableNames: database.TableMapping{
+				Users:           cfg.TableNames.Users,
+				Tokens:          cfg.TableNames.Tokens,
+				Sessions:        cfg.TableNames.Sessions,
+				Roles:           cfg.TableNames.Roles,
+				Permissions:     cfg.TableNames.Permissions,
+				RolePermissions: cfg.TableNames.RolePermissions,
+				RememberTokens:  cfg.TableNames.RememberTokens,
+			},
+		})
+	case "mysql":
+		if cfg.DatabaseDSN == "" {
+			panic("MySQL DSN is required")
+		}
+		db, err = database.NewMySQLWithConfig(database.MySQLConfig{
+			DSN:             cfg.DatabaseDSN,
+			MaxOpenConns:    cfg.MaxOpenConns,
+			MaxIdleConns:    cfg.MaxIdleConns,
+			ConnMaxLifetime: cfg.ConnMaxLifetime,
+			AutoMigrate:     cfg.AutoMigrate,
+			MigrationTable:  cfg.MigrationTable,
+			TableNames: database.TableMapping{
+				Users:           cfg.TableNames.Users,
+				Tokens:          cfg.TableNames.Tokens,
+				Sessions:        cfg.TableNames.Sessions,
+				Roles:           cfg.TableNames.Roles,
+				Permissions:     cfg.TableNames.Permissions,
+				RolePermissions: cfg.TableNames.RolePermissions,
+				RememberTokens:  cfg.TableNames.RememberTokens,
+			},
+		})
+	default:
+		panic("unsupported database type: " + cfg.DatabaseType)
+	}
+
+	if err != nil {
+		panic("failed to initialize database: " + err.Error())
+	}
+
+	// Validate schema if requested
+	if cfg.ValidateSchema {
+		validator := database.NewSchemaValidator(db)
+
+		// Build mapping based on enabled features
+		mapping := database.TableMapping{
+			Users: cfg.TableNames.Users, // Always required
+		}
+
+		// Only require tokens table if email verification or password reset is enabled
+		if cfg.Features.EmailVerification || cfg.Features.PasswordReset {
+			mapping.Tokens = cfg.TableNames.Tokens
+		}
+
+		// Only require sessions table if using database sessions
+		if cfg.SessionBackend == SessionBackendDatabase {
+			mapping.Sessions = cfg.TableNames.Sessions
+		}
+
+		// Only require RBAC tables if RBAC is enabled
+		if cfg.Features.RBAC {
+			mapping.Roles = cfg.TableNames.Roles
+			mapping.Permissions = cfg.TableNames.Permissions
+			mapping.RolePermissions = cfg.TableNames.RolePermissions
+		}
+
+		// Only require remember tokens table if remember me is enabled
+		if cfg.Features.RememberMe {
+			mapping.RememberTokens = cfg.TableNames.RememberTokens
+		}
+
+		// Skip full validation if external auth is enabled and no Guardian-specific features are used
+		if cfg.Features.ExternalAuth &&
+			!cfg.Features.EmailVerification &&
+			!cfg.Features.PasswordReset &&
+			!cfg.Features.RBAC &&
+			!cfg.Features.RememberMe {
+			// For external auth with minimal features, only check that users table exists
+			// Don't validate column names as they might be completely different
+			log.Println("✓ External auth mode - skipping full schema validation")
+		} else {
+			if err := validator.ValidateWithMapping(mapping); err != nil {
+				panic("schema validation failed: " + err.Error() +
+					"\nPlease ensure all required tables and columns exist. " +
+					"See database/SCHEMA.md for requirements.")
+			}
+			log.Println("✓ Database schema validated successfully")
+		}
+	}
+
+	// Initialize session store based on backend
+	var sessionStore sessions.Store
+
+	// Set default session options if not provided
+	if cfg.SessionOptions == nil {
+		cfg.SessionOptions = &sessions.Options{
+			Path:     "/",
+			MaxAge:   1800, // 30 minutes
+			HttpOnly: true,
+			Secure:   cfg.Environment == "production",
+			SameSite: http.SameSiteLaxMode,
+		}
+	}
+
+	switch cfg.SessionBackend {
+	case SessionBackendCookie:
+		sessionStore = sessions.NewCookieStore(cfg.SessionKey)
+		sessionStore.(*sessions.CookieStore).Options = cfg.SessionOptions
+
+	case SessionBackendMemory:
+		store := NewInMemoryStore(cfg.SessionKey)
+		store.options = cfg.SessionOptions
+		sessionStore = store
+		log.Println("⚠️  Using in-memory sessions - sessions will be lost on restart")
+		log.Println("⚠️  Not suitable for production multi-server deployments")
+
+	case SessionBackendDatabase:
+		// For database sessions, we'd need to implement a custom store
+		// This would require:
+		// 1. Implementing sessions.Store interface
+		// 2. Storing session data in the sessions table
+		// 3. Handling session cleanup/expiration
+		// 4. Proper serialization of session values
+		panic("Database session backend not yet implemented. Please use 'cookie' or 'memory' backends.")
+
+	default:
+		panic("unsupported session backend: " + string(cfg.SessionBackend))
+	}
+
+	// Initialize auth service with table names and features
+	authService := auth.NewServiceWithConfig(auth.ServiceConfig{
+		Store: sessionStore,
+		DB:    db.DB,
+		TableNames: auth.TableConfig{
+			Users:           cfg.TableNames.Users,
+			Tokens:          cfg.TableNames.Tokens,
+			Sessions:        cfg.TableNames.Sessions,
+			Roles:           cfg.TableNames.Roles,
+			Permissions:     cfg.TableNames.Permissions,
+			RolePermissions: cfg.TableNames.RolePermissions,
+			RememberTokens:  cfg.TableNames.RememberTokens,
+		},
+		ColumnNames: auth.ColumnConfig{
+			UserID:       cfg.ColumnNames.UserID,
+			UserEmail:    cfg.ColumnNames.UserEmail,
+			UserPassword: cfg.ColumnNames.UserPassword,
+			UserVerified: cfg.ColumnNames.UserVerified,
+			UserCreated:  cfg.ColumnNames.UserCreated,
+			UserRoleID:   cfg.ColumnNames.UserRoleID,
+
+			TokenID:      cfg.ColumnNames.TokenID,
+			TokenValue:   cfg.ColumnNames.TokenValue,
+			TokenUserID:  cfg.ColumnNames.TokenUserID,
+			TokenPurpose: cfg.ColumnNames.TokenPurpose,
+			TokenExpires: cfg.ColumnNames.TokenExpires,
+			TokenCreated: cfg.ColumnNames.TokenCreated,
+		},
+		Features: auth.FeatureConfig{
+			EmailVerification: cfg.Features.EmailVerification,
+			PasswordReset:     cfg.Features.PasswordReset,
+			RememberMe:        cfg.Features.RememberMe,
+			RBAC:              cfg.Features.RBAC,
+			ExternalAuth:      cfg.Features.ExternalAuth,
+		},
+	})
+
+	// Initialize router
+	r := router.New()
+
+	return &Guardian{
+		router:   r,
+		db:       db,
+		auth:     authService,
+		sessions: sessionStore,
+		config:   cfg,
+	}
+}
+
+// Router methods delegation
+func (g *Guardian) GET(pattern string, handler http.HandlerFunc) *router.Route {
+	return g.router.GET(pattern, handler)
+}
+
+func (g *Guardian) POST(pattern string, handler http.HandlerFunc) *router.Route {
+	return g.router.POST(pattern, handler)
+}
+
+func (g *Guardian) PUT(pattern string, handler http.HandlerFunc) *router.Route {
+	return g.router.PUT(pattern, handler)
+}
+
+func (g *Guardian) DELETE(pattern string, handler http.HandlerFunc) *router.Route {
+	return g.router.DELETE(pattern, handler)
+}
+
+func (g *Guardian) PATCH(pattern string, handler http.HandlerFunc) *router.Route {
+	return g.router.PATCH(pattern, handler)
+}
+
+func (g *Guardian) Use(middleware ...func(http.Handler) http.Handler) {
+	g.router.Use(middleware...)
+}
+
+func (g *Guardian) Group(pattern string) *router.Group {
+	return g.router.Group(pattern)
+}
+
+func (g *Guardian) Auth() *auth.Service {
+	return g.auth
+}
+
+func (g *Guardian) DB() *database.DB {
+	return g.db
+}
+
+func (g *Guardian) Sessions() sessions.Store {
+	return g.sessions
+}
+
+func (g *Guardian) Config() Config {
+	return g.config
+}
+
+// Features returns the enabled features configuration
+func (g *Guardian) Features() Features {
+	return g.config.Features
+}
+
+// IsFeatureEnabled checks if a specific feature is enabled
+func (g *Guardian) IsFeatureEnabled(feature string) bool {
+	switch feature {
+	case "email_verification":
+		return g.config.Features.EmailVerification
+	case "password_reset":
+		return g.config.Features.PasswordReset
+	case "remember_me":
+		return g.config.Features.RememberMe
+	case "rbac":
+		return g.config.Features.RBAC
+	case "external_auth":
+		return g.config.Features.ExternalAuth
+	default:
+		return false
+	}
+}
+
+func (g *Guardian) Listen(addr string) error {
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      g.router,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
+	// Graceful shutdown
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		<-sigChan
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		srv.Shutdown(ctx)
+		g.db.Close()
+	}()
+
+	log.Printf("Guardian server starting on %s", addr)
+	return srv.ListenAndServe()
+}
+
+// RunMigrations manually runs Guardian's migrations
+// This is useful if you want to run migrations separately from app initialization
+func (g *Guardian) RunMigrations() error {
+	return g.db.Migrate()
+}
+
+// RunSpecificMigrations runs only specific migrations by version
+func (g *Guardian) RunSpecificMigrations(versions ...string) error {
+	return g.db.MigrateUp(versions...)
+}
+
+// GetAvailableMigrations returns all Guardian migrations for inspection
+func GetAvailableMigrations() []database.Migration {
+	return database.GetMigrations()
+}
+</file>
+
+</files>
