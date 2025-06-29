@@ -24,6 +24,10 @@ var (
 // RoleID int64
 
 func (s *Service) GetUserRole(userID int64) (*Role, error) {
+	if !s.features.RBAC {
+		return nil, ErrFeatureDisabled
+	}
+
 	var role Role
 	query := fmt.Sprintf(`
 		SELECT r.id, r.name 
@@ -64,6 +68,10 @@ func (s *Service) GetUserRole(userID int64) (*Role, error) {
 }
 
 func (s *Service) UserHasPermission(userID int64, permission string) bool {
+	if !s.features.RBAC {
+		return false
+	}
+
 	var count int
 	query := fmt.Sprintf(`
 		SELECT COUNT(*) 
@@ -76,4 +84,15 @@ func (s *Service) UserHasPermission(userID int64, permission string) bool {
 	err := s.db.QueryRow(query, userID, permission).Scan(&count)
 
 	return err == nil && count > 0
+}
+
+// AssignRole assigns a role to a user
+func (s *Service) AssignRole(userID int64, roleID int64) error {
+	if !s.features.RBAC {
+		return ErrFeatureDisabled
+	}
+
+	query := fmt.Sprintf("UPDATE %s SET role_id = ? WHERE id = ?", s.tables.Users)
+	_, err := s.db.Exec(query, roleID, userID)
+	return err
 }

@@ -3,11 +3,10 @@ package database
 import (
 	"database/sql"
 	"fmt"
-	"slices"
 	"strings"
 )
 
-// RequiredColumns defines the columns required for each logical table
+// RequiredColumns defines the columns that are always required
 var RequiredColumns = map[string][]string{
 	"users": {
 		"id",
@@ -15,9 +14,13 @@ var RequiredColumns = map[string][]string{
 		"password_hash",
 		"verified",
 		"created_at",
-		"role_id", // Optional, for RBAC
+		"role_id", // Optional column within the users table
 	},
-	"tokens": {
+}
+
+// ConditionalColumns for tables that are only required based on features
+var ConditionalColumns = map[string][]string{
+	"tokens": { // Required for email verification or password reset
 		"id",
 		"token",
 		"user_id",
@@ -25,10 +28,17 @@ var RequiredColumns = map[string][]string{
 		"expires_at",
 		"created_at",
 	},
-	"sessions": {
+	"sessions": { // Required for database session backend
 		"id",
 		"user_id",
 		"data",
+		"expires_at",
+		"created_at",
+	},
+	"remember_tokens": { // Required for remember me feature
+		"id",
+		"user_id",
+		"token",
 		"expires_at",
 		"created_at",
 	},
@@ -48,13 +58,7 @@ var OptionalColumns = map[string][]string{
 		"role_id",
 		"permission_id",
 	},
-	"remember_tokens": {
-		"id",
-		"user_id",
-		"token",
-		"expires_at",
-		"created_at",
-	},
+	// REMOVED remember_tokens from here - it was duplicated
 }
 
 type SchemaValidator struct {
@@ -72,37 +76,170 @@ func (v *SchemaValidator) Validate() error {
 
 // ValidateWithMapping validates schema with custom table mapping
 func (v *SchemaValidator) ValidateWithMapping(mapping TableMapping) error {
-	// Map logical tables to actual table names
-	tableMap := map[string]string{
-		"users":    mapping.Users,
-		"tokens":   mapping.Tokens,
-		"sessions": mapping.Sessions,
+	// Always validate users table
+	if mapping.Users == "" {
+		return fmt.Errorf("users table mapping is required")
 	}
 
-	// Check required tables
-	for logicalTable, columns := range RequiredColumns {
-		actualTable := tableMap[logicalTable]
-		if actualTable == "" {
-			return fmt.Errorf("no table mapping for logical table '%s'", logicalTable)
-		}
+	exists, err := v.tableExists(mapping.Users)
+	if err != nil {
+		return fmt.Errorf("error checking users table %s: %w", mapping.Users, err)
+	}
+	if !exists {
+		return fmt.Errorf("required table '%s' (users) does not exist", mapping.Users)
+	}
 
-		exists, err := v.tableExists(actualTable)
+	// Check users table columns
+	for _, column := range RequiredColumns["users"] {
+		exists, err := v.columnExists(mapping.Users, column)
 		if err != nil {
-			return fmt.Errorf("error checking table %s (mapped from %s): %w", actualTable, logicalTable, err)
+			// Column might be optional (like role_id)
+			continue
+		}
+		if !exists && column != "role_id" { // role_id is optional
+			return fmt.Errorf("required column '%s.%s' does not exist", mapping.Users, column)
+		}
+	}
+
+	// Check tokens table if provided in mapping
+	if mapping.Tokens != "" {
+		exists, err := v.tableExists(mapping.Tokens)
+		if err != nil {
+			return fmt.Errorf("error checking tokens table %s: %w", mapping.Tokens, err)
 		}
 		if !exists {
-			return fmt.Errorf("required table '%s' (for %s) does not exist", actualTable, logicalTable)
+			return fmt.Errorf("tokens table '%s' does not exist (required for email verification/password reset)", mapping.Tokens)
 		}
 
-		// Check required columns
-		for _, column := range columns {
-			exists, err := v.columnExists(actualTable, column)
+		// Check tokens columns
+		for _, column := range ConditionalColumns["tokens"] {
+			exists, err := v.columnExists(mapping.Tokens, column)
 			if err != nil {
-				// Column might be optional (like role_id)
-				continue
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Tokens, column, err)
 			}
-			if !exists && column != "role_id" { // role_id is optional
-				return fmt.Errorf("required column '%s.%s' does not exist", actualTable, column)
+			if !exists {
+				return fmt.Errorf("required column '%s.%s' does not exist", mapping.Tokens, column)
+			}
+		}
+	}
+
+	// Check sessions table if provided in mapping
+	if mapping.Sessions != "" {
+		exists, err := v.tableExists(mapping.Sessions)
+		if err != nil {
+			return fmt.Errorf("error checking sessions table %s: %w", mapping.Sessions, err)
+		}
+		if !exists {
+			return fmt.Errorf("sessions table '%s' does not exist (required for database session backend)", mapping.Sessions)
+		}
+
+		// Check sessions columns
+		for _, column := range ConditionalColumns["sessions"] {
+			exists, err := v.columnExists(mapping.Sessions, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Sessions, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("required column '%s.%s' does not exist", mapping.Sessions, column)
+			}
+		}
+	}
+
+	// Check remember_tokens table if provided in mapping
+	if mapping.RememberTokens != "" {
+		exists, err := v.tableExists(mapping.RememberTokens)
+		if err != nil {
+			return fmt.Errorf("error checking remember_tokens table %s: %w", mapping.RememberTokens, err)
+		}
+		if !exists {
+			return fmt.Errorf("remember_tokens table '%s' does not exist (required for remember me feature)", mapping.RememberTokens)
+		}
+
+		// Check columns
+		for _, column := range ConditionalColumns["remember_tokens"] {
+			exists, err := v.columnExists(mapping.RememberTokens, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.RememberTokens, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("required column '%s.%s' does not exist", mapping.RememberTokens, column)
+			}
+		}
+	}
+
+	// Check RBAC tables if provided in mapping
+	if mapping.Roles != "" || mapping.Permissions != "" || mapping.RolePermissions != "" {
+		// Validate RBAC tables
+		err := v.validateRBACTables(mapping)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// validateRBACTables validates RBAC-related tables
+func (v *SchemaValidator) validateRBACTables(mapping TableMapping) error {
+	// Check roles table
+	if mapping.Roles != "" {
+		exists, err := v.tableExists(mapping.Roles)
+		if err != nil {
+			return fmt.Errorf("error checking roles table %s: %w", mapping.Roles, err)
+		}
+		if !exists {
+			return fmt.Errorf("RBAC table '%s' (roles) does not exist", mapping.Roles)
+		}
+
+		for _, column := range OptionalColumns["roles"] {
+			exists, err := v.columnExists(mapping.Roles, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Roles, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("RBAC column '%s.%s' does not exist", mapping.Roles, column)
+			}
+		}
+	}
+
+	// Check permissions table
+	if mapping.Permissions != "" {
+		exists, err := v.tableExists(mapping.Permissions)
+		if err != nil {
+			return fmt.Errorf("error checking permissions table %s: %w", mapping.Permissions, err)
+		}
+		if !exists {
+			return fmt.Errorf("RBAC table '%s' (permissions) does not exist", mapping.Permissions)
+		}
+
+		for _, column := range OptionalColumns["permissions"] {
+			exists, err := v.columnExists(mapping.Permissions, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.Permissions, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("RBAC column '%s.%s' does not exist", mapping.Permissions, column)
+			}
+		}
+	}
+
+	// Check role_permissions table
+	if mapping.RolePermissions != "" {
+		exists, err := v.tableExists(mapping.RolePermissions)
+		if err != nil {
+			return fmt.Errorf("error checking role_permissions table %s: %w", mapping.RolePermissions, err)
+		}
+		if !exists {
+			return fmt.Errorf("RBAC table '%s' (role_permissions) does not exist", mapping.RolePermissions)
+		}
+
+		for _, column := range OptionalColumns["role_permissions"] {
+			exists, err := v.columnExists(mapping.RolePermissions, column)
+			if err != nil {
+				return fmt.Errorf("error checking column %s.%s: %w", mapping.RolePermissions, column, err)
+			}
+			if !exists {
+				return fmt.Errorf("RBAC column '%s.%s' does not exist", mapping.RolePermissions, column)
 			}
 		}
 	}
@@ -117,41 +254,7 @@ func (v *SchemaValidator) ValidateRBAC() error {
 
 // ValidateRBACWithMapping validates RBAC tables with custom mapping
 func (v *SchemaValidator) ValidateRBACWithMapping(mapping TableMapping) error {
-	// Map logical tables to actual table names
-	tableMap := map[string]string{
-		"roles":            mapping.Roles,
-		"permissions":      mapping.Permissions,
-		"role_permissions": mapping.RolePermissions,
-		"remember_tokens":  mapping.RememberTokens,
-	}
-
-	// Check optional RBAC tables
-	for logicalTable, columns := range OptionalColumns {
-		actualTable := tableMap[logicalTable]
-		if actualTable == "" {
-			return fmt.Errorf("no table mapping for logical table '%s'", logicalTable)
-		}
-
-		exists, err := v.tableExists(actualTable)
-		if err != nil {
-			return fmt.Errorf("error checking table %s (mapped from %s): %w", actualTable, logicalTable, err)
-		}
-		if !exists {
-			return fmt.Errorf("RBAC table '%s' (for %s) does not exist", actualTable, logicalTable)
-		}
-
-		for _, column := range columns {
-			exists, err := v.columnExists(actualTable, column)
-			if err != nil {
-				return fmt.Errorf("error checking column %s.%s: %w", actualTable, column, err)
-			}
-			if !exists {
-				return fmt.Errorf("RBAC column '%s.%s' does not exist", actualTable, column)
-			}
-		}
-	}
-
-	return nil
+	return v.validateRBACTables(mapping)
 }
 
 func (v *SchemaValidator) tableExists(name string) (bool, error) {
@@ -232,8 +335,10 @@ func validateTableName(name string) error {
 	// Prevent SQL keywords
 	keywords := []string{"SELECT", "DROP", "DELETE", "INSERT", "UPDATE", "WHERE", "FROM"}
 	nameUpper := strings.ToUpper(name)
-	if slices.Contains(keywords, nameUpper) {
-		return fmt.Errorf("invalid table name: %s (SQL keyword)", name)
+	for _, keyword := range keywords {
+		if nameUpper == keyword {
+			return fmt.Errorf("invalid table name: %s (SQL keyword)", name)
+		}
 	}
 
 	return nil

@@ -20,10 +20,9 @@ func GetMigrations() []Migration {
 	return migrations
 }
 
-// GetRequiredTables returns the tables required by Guardian
-// This is useful for users who want to validate their custom schema
+// GetRequiredTables returns the tables that are always required
 func GetRequiredTables() map[string][]string {
-	// Return the tables defined in schema.go
+	// Only users table is always required
 	return map[string][]string{
 		"users": {
 			"id",
@@ -31,9 +30,16 @@ func GetRequiredTables() map[string][]string {
 			"password_hash",
 			"verified",
 			"created_at",
-			"role_id", // Optional, for RBAC
+			"role_id", // Optional column for RBAC
 		},
-		"tokens": {
+	}
+}
+
+// GetConditionalTables returns tables that are conditionally required
+// based on which features are enabled
+func GetConditionalTables() map[string][]string {
+	return map[string][]string{
+		"tokens": { // Required for email verification or password reset
 			"id",
 			"token",
 			"user_id",
@@ -41,10 +47,17 @@ func GetRequiredTables() map[string][]string {
 			"expires_at",
 			"created_at",
 		},
-		"sessions": {
+		"sessions": { // Required for database session backend
 			"id",
 			"user_id",
 			"data",
+			"expires_at",
+			"created_at",
+		},
+		"remember_tokens": { // Required for remember me feature
+			"id",
+			"user_id",
+			"token",
 			"expires_at",
 			"created_at",
 		},
@@ -109,6 +122,7 @@ var migrations = []Migration{
 	{
 		Version: "002",
 		Name:    "create_tokens_table",
+		// Note: This table is only needed if using email verification or password reset features
 		UpSQLite: `
             CREATE TABLE IF NOT EXISTS tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,6 +155,8 @@ var migrations = []Migration{
 	{
 		Version: "003",
 		Name:    "create_sessions_table",
+		// Note: This table is only needed if using database session backend
+		// Guardian uses cookie sessions by default, so this table is optional
 		UpSQLite: `
             CREATE TABLE IF NOT EXISTS sessions (
                 id TEXT PRIMARY KEY,

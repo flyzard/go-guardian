@@ -1,4 +1,3 @@
-// File: guardian.go
 package guardian
 
 import (
@@ -7,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,11 +16,20 @@ import (
 	"github.com/gorilla/sessions"
 )
 
+// SessionBackend defines the type of session storage
+type SessionBackend string
+
+const (
+	SessionBackendCookie   SessionBackend = "cookie"   // Default: encrypted cookies
+	SessionBackendMemory   SessionBackend = "memory"   // In-memory store
+	SessionBackendDatabase SessionBackend = "database" // Database-backed sessions
+)
+
 // TableNames allows customizing table names
 type TableNames struct {
 	Users           string
-	Tokens          string
-	Sessions        string
+	Tokens          string // Only required if using email verification or password reset
+	Sessions        string // Only required if using database sessions
 	Roles           string
 	Permissions     string
 	RolePermissions string
@@ -37,6 +46,65 @@ func DefaultTableNames() TableNames {
 		Permissions:     "permissions",
 		RolePermissions: "role_permissions",
 		RememberTokens:  "remember_tokens",
+	}
+}
+
+// ColumnNames allows customizing column names
+type ColumnNames struct {
+	// Users table columns
+	UserID       string
+	UserEmail    string
+	UserPassword string
+	UserVerified string
+	UserCreated  string
+	UserRoleID   string
+
+	// Tokens table columns
+	TokenID      string
+	TokenValue   string
+	TokenUserID  string
+	TokenPurpose string
+	TokenExpires string
+	TokenCreated string
+}
+
+// DefaultColumnNames returns the default column names
+func DefaultColumnNames() ColumnNames {
+	return ColumnNames{
+		UserID:       "id",
+		UserEmail:    "email",
+		UserPassword: "password_hash",
+		UserVerified: "verified",
+		UserCreated:  "created_at",
+		UserRoleID:   "role_id",
+
+		TokenID:      "id",
+		TokenValue:   "token",
+		TokenUserID:  "user_id",
+		TokenPurpose: "purpose",
+		TokenExpires: "expires_at",
+		TokenCreated: "created_at",
+	}
+}
+
+// Features allows disabling optional features
+type Features struct {
+	EmailVerification bool // Requires tokens table
+	PasswordReset     bool // Requires tokens table
+	RememberMe        bool // Requires remember_tokens table
+	RBAC              bool // Requires roles, permissions tables
+	ExternalAuth      bool // Enable external authentication (SSO, LDAP, etc.)
+}
+
+// DefaultFeatures returns all features enabled
+// This maintains backward compatibility - existing apps get all features
+func DefaultFeatures() Features {
+	return Features{
+		EmailVerification: true,
+		PasswordReset:     true,
+		RememberMe:        true,
+		RBAC:              true,
+		ExternalAuth:      false,
 	}
 }
 
@@ -59,6 +127,16 @@ type Config struct {
 
 	// Table name mapping
 	TableNames TableNames // Custom table names (default: standard names)
+
+	// Column name mapping
+	ColumnNames ColumnNames // Custom column names (default: standard names)
+
+	// Session configuration
+	SessionBackend SessionBackend    // Type of session storage (default: "cookie")
+	SessionOptions *sessions.Options // Session cookie options
+
+	// Feature flags
+	Features Features // Which features to enable (default: all)
 }
 
 type Guardian struct {
@@ -67,6 +145,91 @@ type Guardian struct {
 	auth     *auth.Service
 	sessions sessions.Store
 	config   Config
+}
+
+// InMemoryStore implements a simple in-memory session store
+type InMemoryStore struct {
+	mu       sync.RWMutex
+	sessions map[string]*sessions.Session
+	options  *sessions.Options
+}
+
+func NewInMemoryStore(keyPairs ...[]byte) *InMemoryStore {
+	return &InMemoryStore{
+		sessions: make(map[string]*sessions.Session),
+		options: &sessions.Options{
+			Path:     "/",
+			MaxAge:   1800, // 30 minutes
+			HttpOnly: true,
+		},
+	}
+}
+
+func (s *InMemoryStore) Get(r *http.Request, name string) (*sessions.Session, error) {
+	return sessions.GetRegistry(r).Get(s, name)
+}
+
+func (s *InMemoryStore) New(r *http.Request, name string) (*sessions.Session, error) {
+	session := sessions.NewSession(s, name)
+	opts := *s.options
+	session.Options = &opts
+	session.IsNew = true
+
+	// Try to get existing session from cookie
+	if cookie, err := r.Cookie(name); err == nil {
+		s.mu.RLock()
+		if existing, exists := s.sessions[cookie.Value]; exists {
+			s.mu.RUnlock()
+			// Return the existing session
+			existing.IsNew = false
+			return existing, nil
+		}
+		s.mu.RUnlock()
+	}
+
+	return session, nil
+}
+
+func (s *InMemoryStore) Save(r *http.Request, w http.ResponseWriter, session *sessions.Session) error {
+	// Delete session
+	if session.Options.MaxAge <= 0 {
+		s.mu.Lock()
+		delete(s.sessions, session.ID)
+		s.mu.Unlock()
+
+		http.SetCookie(w, sessions.NewCookie(session.Name(), "", session.Options))
+		return nil
+	}
+
+	// Generate session ID if new
+	if session.ID == "" {
+		session.ID = generateSessionID()
+	}
+
+	// Store in memory
+	s.mu.Lock()
+	s.sessions[session.ID] = session
+	s.mu.Unlock()
+
+	// Set cookie with session ID
+	http.SetCookie(w, sessions.NewCookie(session.Name(), session.ID, session.Options))
+
+	return nil
+}
+
+func (s *InMemoryStore) cleanup() {
+	// Simple cleanup - in production, use a proper scheduler
+	// This is a placeholder for a more sophisticated implementation
+	// that would periodically clean up expired sessions
+}
+
+func (s *InMemoryStore) Options(options *sessions.Options) {
+	s.options = options
+}
+
+func generateSessionID() string {
+	// Use the same token generation as auth
+	return auth.GenerateToken()
 }
 
 func New(cfg Config) *Guardian {
@@ -88,9 +251,19 @@ func New(cfg Config) *Guardian {
 		cfg.DatabasePath = "guardian.db"
 	}
 
+	// Set defaults for sessions
+	if cfg.SessionBackend == "" {
+		cfg.SessionBackend = SessionBackendCookie
+	}
+
 	// Set defaults for migrations
 	if cfg.MigrationTable == "" {
 		cfg.MigrationTable = "migrations"
+	}
+
+	// Set default features if not provided
+	if cfg.Features == (Features{}) {
+		cfg.Features = DefaultFeatures()
 	}
 
 	// Set default table names if not provided
@@ -122,6 +295,50 @@ func New(cfg Config) *Guardian {
 		}
 	}
 
+	// Set default column names if not provided
+	if cfg.ColumnNames == (ColumnNames{}) {
+		cfg.ColumnNames = DefaultColumnNames()
+	} else {
+		// Fill in any missing column names with defaults
+		defaults := DefaultColumnNames()
+		if cfg.ColumnNames.UserID == "" {
+			cfg.ColumnNames.UserID = defaults.UserID
+		}
+		if cfg.ColumnNames.UserEmail == "" {
+			cfg.ColumnNames.UserEmail = defaults.UserEmail
+		}
+		if cfg.ColumnNames.UserPassword == "" {
+			cfg.ColumnNames.UserPassword = defaults.UserPassword
+		}
+		if cfg.ColumnNames.UserVerified == "" {
+			cfg.ColumnNames.UserVerified = defaults.UserVerified
+		}
+		if cfg.ColumnNames.UserCreated == "" {
+			cfg.ColumnNames.UserCreated = defaults.UserCreated
+		}
+		if cfg.ColumnNames.UserRoleID == "" {
+			cfg.ColumnNames.UserRoleID = defaults.UserRoleID
+		}
+		if cfg.ColumnNames.TokenID == "" {
+			cfg.ColumnNames.TokenID = defaults.TokenID
+		}
+		if cfg.ColumnNames.TokenValue == "" {
+			cfg.ColumnNames.TokenValue = defaults.TokenValue
+		}
+		if cfg.ColumnNames.TokenUserID == "" {
+			cfg.ColumnNames.TokenUserID = defaults.TokenUserID
+		}
+		if cfg.ColumnNames.TokenPurpose == "" {
+			cfg.ColumnNames.TokenPurpose = defaults.TokenPurpose
+		}
+		if cfg.ColumnNames.TokenExpires == "" {
+			cfg.ColumnNames.TokenExpires = defaults.TokenExpires
+		}
+		if cfg.ColumnNames.TokenCreated == "" {
+			cfg.ColumnNames.TokenCreated = defaults.TokenCreated
+		}
+	}
+
 	// Default to true for backward compatibility
 	if !cfg.AutoMigrate && cfg.ValidateSchema == false {
 		cfg.ValidateSchema = true
@@ -137,7 +354,15 @@ func New(cfg Config) *Guardian {
 			Path:           cfg.DatabasePath,
 			AutoMigrate:    cfg.AutoMigrate,
 			MigrationTable: cfg.MigrationTable,
-			TableNames:     database.TableMapping(cfg.TableNames),
+			TableNames: database.TableMapping{
+				Users:           cfg.TableNames.Users,
+				Tokens:          cfg.TableNames.Tokens,
+				Sessions:        cfg.TableNames.Sessions,
+				Roles:           cfg.TableNames.Roles,
+				Permissions:     cfg.TableNames.Permissions,
+				RolePermissions: cfg.TableNames.RolePermissions,
+				RememberTokens:  cfg.TableNames.RememberTokens,
+			},
 		})
 	case "mysql":
 		if cfg.DatabaseDSN == "" {
@@ -150,7 +375,15 @@ func New(cfg Config) *Guardian {
 			ConnMaxLifetime: cfg.ConnMaxLifetime,
 			AutoMigrate:     cfg.AutoMigrate,
 			MigrationTable:  cfg.MigrationTable,
-			TableNames:      database.TableMapping(cfg.TableNames),
+			TableNames: database.TableMapping{
+				Users:           cfg.TableNames.Users,
+				Tokens:          cfg.TableNames.Tokens,
+				Sessions:        cfg.TableNames.Sessions,
+				Roles:           cfg.TableNames.Roles,
+				Permissions:     cfg.TableNames.Permissions,
+				RolePermissions: cfg.TableNames.RolePermissions,
+				RememberTokens:  cfg.TableNames.RememberTokens,
+			},
 		})
 	default:
 		panic("unsupported database type: " + cfg.DatabaseType)
@@ -163,29 +396,127 @@ func New(cfg Config) *Guardian {
 	// Validate schema if requested
 	if cfg.ValidateSchema {
 		validator := database.NewSchemaValidator(db)
-		if err := validator.ValidateWithMapping(database.TableMapping(cfg.TableNames)); err != nil {
-			panic("schema validation failed: " + err.Error() +
-				"\nPlease ensure all required tables and columns exist. " +
-				"See database/SCHEMA.md for requirements.")
+
+		// Build mapping based on enabled features
+		mapping := database.TableMapping{
+			Users: cfg.TableNames.Users, // Always required
 		}
-		log.Println("✓ Database schema validated successfully")
+
+		// Only require tokens table if email verification or password reset is enabled
+		if cfg.Features.EmailVerification || cfg.Features.PasswordReset {
+			mapping.Tokens = cfg.TableNames.Tokens
+		}
+
+		// Only require sessions table if using database sessions
+		if cfg.SessionBackend == SessionBackendDatabase {
+			mapping.Sessions = cfg.TableNames.Sessions
+		}
+
+		// Only require RBAC tables if RBAC is enabled
+		if cfg.Features.RBAC {
+			mapping.Roles = cfg.TableNames.Roles
+			mapping.Permissions = cfg.TableNames.Permissions
+			mapping.RolePermissions = cfg.TableNames.RolePermissions
+		}
+
+		// Only require remember tokens table if remember me is enabled
+		if cfg.Features.RememberMe {
+			mapping.RememberTokens = cfg.TableNames.RememberTokens
+		}
+
+		// Skip full validation if external auth is enabled and no Guardian-specific features are used
+		if cfg.Features.ExternalAuth &&
+			!cfg.Features.EmailVerification &&
+			!cfg.Features.PasswordReset &&
+			!cfg.Features.RBAC &&
+			!cfg.Features.RememberMe {
+			// For external auth with minimal features, only check that users table exists
+			// Don't validate column names as they might be completely different
+			log.Println("✓ External auth mode - skipping full schema validation")
+		} else {
+			if err := validator.ValidateWithMapping(mapping); err != nil {
+				panic("schema validation failed: " + err.Error() +
+					"\nPlease ensure all required tables and columns exist. " +
+					"See database/SCHEMA.md for requirements.")
+			}
+			log.Println("✓ Database schema validated successfully")
+		}
 	}
 
-	// Initialize session store
-	sessionStore := sessions.NewCookieStore(cfg.SessionKey)
-	sessionStore.Options = &sessions.Options{
-		Path:     "/",
-		MaxAge:   1800, // 30 minutes
-		HttpOnly: true,
-		Secure:   cfg.Environment == "production",
-		SameSite: http.SameSiteLaxMode,
+	// Initialize session store based on backend
+	var sessionStore sessions.Store
+
+	// Set default session options if not provided
+	if cfg.SessionOptions == nil {
+		cfg.SessionOptions = &sessions.Options{
+			Path:     "/",
+			MaxAge:   1800, // 30 minutes
+			HttpOnly: true,
+			Secure:   cfg.Environment == "production",
+			SameSite: http.SameSiteLaxMode,
+		}
 	}
 
-	// Initialize auth service with table names
+	switch cfg.SessionBackend {
+	case SessionBackendCookie:
+		sessionStore = sessions.NewCookieStore(cfg.SessionKey)
+		sessionStore.(*sessions.CookieStore).Options = cfg.SessionOptions
+
+	case SessionBackendMemory:
+		store := NewInMemoryStore(cfg.SessionKey)
+		store.options = cfg.SessionOptions
+		sessionStore = store
+		log.Println("⚠️  Using in-memory sessions - sessions will be lost on restart")
+		log.Println("⚠️  Not suitable for production multi-server deployments")
+
+	case SessionBackendDatabase:
+		// For database sessions, we'd need to implement a custom store
+		// This would require:
+		// 1. Implementing sessions.Store interface
+		// 2. Storing session data in the sessions table
+		// 3. Handling session cleanup/expiration
+		// 4. Proper serialization of session values
+		panic("Database session backend not yet implemented. Please use 'cookie' or 'memory' backends.")
+
+	default:
+		panic("unsupported session backend: " + string(cfg.SessionBackend))
+	}
+
+	// Initialize auth service with table names and features
 	authService := auth.NewServiceWithConfig(auth.ServiceConfig{
-		Store:      sessionStore,
-		DB:         db.DB,
-		TableNames: auth.TableConfig(cfg.TableNames),
+		Store: sessionStore,
+		DB:    db.DB,
+		TableNames: auth.TableConfig{
+			Users:           cfg.TableNames.Users,
+			Tokens:          cfg.TableNames.Tokens,
+			Sessions:        cfg.TableNames.Sessions,
+			Roles:           cfg.TableNames.Roles,
+			Permissions:     cfg.TableNames.Permissions,
+			RolePermissions: cfg.TableNames.RolePermissions,
+			RememberTokens:  cfg.TableNames.RememberTokens,
+		},
+		ColumnNames: auth.ColumnConfig{
+			UserID:       cfg.ColumnNames.UserID,
+			UserEmail:    cfg.ColumnNames.UserEmail,
+			UserPassword: cfg.ColumnNames.UserPassword,
+			UserVerified: cfg.ColumnNames.UserVerified,
+			UserCreated:  cfg.ColumnNames.UserCreated,
+			UserRoleID:   cfg.ColumnNames.UserRoleID,
+
+			TokenID:      cfg.ColumnNames.TokenID,
+			TokenValue:   cfg.ColumnNames.TokenValue,
+			TokenUserID:  cfg.ColumnNames.TokenUserID,
+			TokenPurpose: cfg.ColumnNames.TokenPurpose,
+			TokenExpires: cfg.ColumnNames.TokenExpires,
+			TokenCreated: cfg.ColumnNames.TokenCreated,
+		},
+		Features: auth.FeatureConfig{
+			EmailVerification: cfg.Features.EmailVerification,
+			PasswordReset:     cfg.Features.PasswordReset,
+			RememberMe:        cfg.Features.RememberMe,
+			RBAC:              cfg.Features.RBAC,
+			ExternalAuth:      cfg.Features.ExternalAuth,
+		},
 	})
 
 	// Initialize router
@@ -243,6 +574,29 @@ func (g *Guardian) Sessions() sessions.Store {
 
 func (g *Guardian) Config() Config {
 	return g.config
+}
+
+// Features returns the enabled features configuration
+func (g *Guardian) Features() Features {
+	return g.config.Features
+}
+
+// IsFeatureEnabled checks if a specific feature is enabled
+func (g *Guardian) IsFeatureEnabled(feature string) bool {
+	switch feature {
+	case "email_verification":
+		return g.config.Features.EmailVerification
+	case "password_reset":
+		return g.config.Features.PasswordReset
+	case "remember_me":
+		return g.config.Features.RememberMe
+	case "rbac":
+		return g.config.Features.RBAC
+	case "external_auth":
+		return g.config.Features.ExternalAuth
+	default:
+		return false
+	}
 }
 
 func (g *Guardian) Listen(addr string) error {

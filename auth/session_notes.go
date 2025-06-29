@@ -3,18 +3,37 @@ package auth
 
 // Session Security Notes:
 //
-// Gorilla sessions has some limitations regarding session regeneration:
-// 1. It creates cookies even for empty sessions (by design)
-// 2. Session regeneration requires manual deletion of old sessions
-// 3. There's no built-in server-side session storage/expiration
+// Guardian supports multiple session backends:
 //
-// For production use, consider:
-// - Implementing server-side session storage (Redis/Database)
-// - Adding session fingerprinting (IP, User-Agent)
-// - Implementing proper session regeneration on privilege changes
-// - Adding server-side session expiration tracking
+// 1. Cookie Sessions (Default):
+//    - Uses gorilla/sessions CookieStore
+//    - Data stored in encrypted cookies on client side
+//    - Limited to 4KB size
+//    - No server-side storage needed
+//    - Survives server restarts
+//    - Scales infinitely
 //
-// The current implementation provides:
-// - Secure cookie settings (HttpOnly, Secure, SameSite)
-// - Basic session regeneration
-// - CSRF protection through double-submit cookies
+// 2. In-Memory Sessions:
+//    - Data stored in server memory
+//    - No size limitations
+//    - Lost on server restart
+//    - Doesn't scale across multiple servers
+//    - Good for development/single-server deployments
+//
+// 3. Database Sessions (Future):
+//    - Data stored in database
+//    - Persistent across restarts
+//    - Scales across multiple servers
+//    - Requires sessions table
+//    - Can query active sessions
+//
+// Security considerations:
+// - All backends use secure session IDs
+// - Cookie sessions are encrypted with the SessionKey
+// - HttpOnly, Secure, and SameSite flags are set by default
+// - Session regeneration on privilege changes recommended
+// - Consider session fingerprinting for additional security
+//
+// The sessions table in the schema is ONLY required if using
+// database session backend. Cookie and memory backends do not
+// need any database tables for session storage.
