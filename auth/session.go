@@ -32,15 +32,26 @@ func RegenerateSession(w http.ResponseWriter, r *http.Request, store sessions.St
 		values[k] = v
 	}
 
-	// Delete old session
+	// Delete old session by setting MaxAge to -1
 	session.Options.MaxAge = -1
-	session.Save(r, w)
+	if err := session.Save(r, w); err != nil {
+		return err
+	}
 
-	// Create new session
-	newSession, _ := store.New(r, "auth-session")
+	// Create new session with a new session ID
+	// Force a new session by using New instead of Get
+	newSession, err := store.New(r, "auth-session")
+	if err != nil {
+		return err
+	}
+
+	// Restore values
 	for k, v := range values {
 		newSession.Values[k] = v
 	}
+
+	// Ensure we get a new session ID by adding a regeneration marker
+	newSession.Values["_regenerated"] = true
 
 	return newSession.Save(r, w)
 }

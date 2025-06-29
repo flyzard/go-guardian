@@ -3,6 +3,7 @@ package security
 import (
 	"html"
 	"regexp"
+	"unicode/utf8"
 )
 
 var (
@@ -39,9 +40,23 @@ func StripTags(input string) string {
 }
 
 // TruncateString safely truncates strings to prevent buffer overflows
+// It ensures that multi-byte UTF-8 characters are not broken
 func TruncateString(s string, maxLength int) string {
 	if len(s) <= maxLength {
 		return s
 	}
-	return s[:maxLength]
+
+	// For ASCII strings, simple truncation works
+	if utf8.ValidString(s[:maxLength]) {
+		return s[:maxLength]
+	}
+
+	// For multi-byte strings, we need to be careful
+	// Truncate at the last valid rune boundary
+	truncated := s[:maxLength]
+	for !utf8.ValidString(truncated) && len(truncated) > 0 {
+		truncated = truncated[:len(truncated)-1]
+	}
+
+	return truncated
 }

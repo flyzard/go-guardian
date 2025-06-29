@@ -1,3 +1,4 @@
+// File: router/router.go
 package router
 
 import (
@@ -82,9 +83,4 @@ func (r *Router) URL(name string, params ...string) string {
 	}
 
 	return url
-}
-
-func replaceParam(pattern, _, _ string) string {
-	// Simple parameter replacement
-	return pattern // TODO: Implement actual replacement
 }
