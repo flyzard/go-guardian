@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"log"
 	"net/http"
 )
 
@@ -11,48 +12,65 @@ const (
 	csrfHeaderName = "X-CSRF-Token"
 )
 
+// CSRFConfig holds CSRF middleware configuration
+type CSRFConfig struct {
+	Secure bool // Whether to use secure cookies (HTTPS only)
+}
+
 // CSRF implements double-submit cookie pattern
 func CSRF(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Skip CSRF for safe methods
-		if r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS" {
-			// Ensure CSRF cookie exists
-			if _, err := r.Cookie(csrfCookieName); err != nil {
-				token := generateCSRFToken()
-				http.SetCookie(w, &http.Cookie{
-					Name:     csrfCookieName,
-					Value:    token,
-					Path:     "/",
-					HttpOnly: false, // Must be readable by JS
-					Secure:   true,
-					SameSite: http.SameSiteStrictMode,
-					MaxAge:   86400, // 24 hours
-				})
+	return CSRFWithConfig(CSRFConfig{Secure: true})(next)
+}
+
+// CSRFWithConfig creates CSRF middleware with custom config
+func CSRFWithConfig(config CSRFConfig) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip CSRF for safe methods
+			if r.Method == "GET" || r.Method == "HEAD" || r.Method == "OPTIONS" {
+				// Ensure CSRF cookie exists
+				if _, err := r.Cookie(csrfCookieName); err != nil {
+					token := generateCSRFToken()
+					cookie := &http.Cookie{
+						Name:     csrfCookieName,
+						Value:    token,
+						Path:     "/",
+						HttpOnly: false, // Must be readable by JS
+						Secure:   config.Secure,
+						SameSite: http.SameSiteLaxMode, // Lax is better for forms
+						MaxAge:   86400,                // 24 hours
+					}
+					http.SetCookie(w, cookie)
+					log.Printf("CSRF: Set new token for %s", r.URL.Path)
+				}
+				next.ServeHTTP(w, r)
+				return
 			}
+
+			// Verify CSRF token for state-changing methods
+			cookie, err := r.Cookie(csrfCookieName)
+			if err != nil {
+				http.Error(w, "CSRF cookie missing", http.StatusForbidden)
+				return
+			}
+
+			// Check header first
+			token := r.Header.Get(csrfHeaderName)
+
+			// If no header, check form value
+			if token == "" {
+				token = r.FormValue("csrf_token")
+			}
+
+			if cookie.Value == "" || cookie.Value != token {
+				log.Printf("CSRF mismatch - Cookie: %s, Token: %s", cookie.Value, token)
+				http.Error(w, "CSRF token mismatch", http.StatusForbidden)
+				return
+			}
+
 			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Verify CSRF token for state-changing methods
-		cookie, err := r.Cookie(csrfCookieName)
-		if err != nil {
-			http.Error(w, "CSRF cookie missing", http.StatusForbidden)
-			return
-		}
-
-		header := r.Header.Get(csrfHeaderName)
-		if header == "" {
-			// Try form value as fallback
-			header = r.FormValue("csrf_token")
-		}
-
-		if cookie.Value == "" || cookie.Value != header {
-			http.Error(w, "CSRF token mismatch", http.StatusForbidden)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+		})
+	}
 }
 
 func generateCSRFToken() string {

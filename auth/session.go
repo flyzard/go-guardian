@@ -14,7 +14,7 @@ func NewSessionStore(secret []byte) *sessions.CookieStore {
 		MaxAge:   1800, // 30 minutes
 		HttpOnly: true,
 		Secure:   true, // HTTPS only in production
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	}
 	return store
 }

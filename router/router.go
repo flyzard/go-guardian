@@ -56,13 +56,6 @@ func (r *Router) PATCH(pattern string, handler http.HandlerFunc) *Route {
 	return route
 }
 
-func (r *Router) Group(pattern string) *Group {
-	return &Group{
-		router:  r,
-		pattern: pattern,
-	}
-}
-
 func (route *Route) Name(name string) *Route {
 	route.RouteName = name
 	if route.router != nil {

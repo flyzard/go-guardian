@@ -87,7 +87,7 @@ func New(cfg Config) *Guardian {
 		MaxAge:   1800, // 30 minutes
 		HttpOnly: true,
 		Secure:   cfg.Environment == "production",
-		SameSite: http.SameSiteStrictMode,
+		SameSite: http.SameSiteLaxMode,
 	}
 
 	// Initialize auth service
@@ -144,6 +144,10 @@ func (g *Guardian) DB() *database.DB {
 
 func (g *Guardian) Sessions() sessions.Store {
 	return g.sessions
+}
+
+func (g *Guardian) Config() Config {
+	return g.config
 }
 
 func (g *Guardian) Listen(addr string) error {
