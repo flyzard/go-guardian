@@ -1,13 +1,9 @@
 package guardian
 
 import (
-	"context"
 	"log"
 	"net/http"
-	"os"
-	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/flyzard/go-guardian/auth"
@@ -217,11 +213,11 @@ func (s *InMemoryStore) Save(r *http.Request, w http.ResponseWriter, session *se
 	return nil
 }
 
-func (s *InMemoryStore) cleanup() {
-	// Simple cleanup - in production, use a proper scheduler
-	// This is a placeholder for a more sophisticated implementation
-	// that would periodically clean up expired sessions
-}
+// func (s *InMemoryStore) cleanup() {
+// 	// Simple cleanup - in production, use a proper scheduler
+// 	// This is a placeholder for a more sophisticated implementation
+// 	// that would periodically clean up expired sessions
+// }
 
 func (s *InMemoryStore) Options(options *sessions.Options) {
 	s.options = options
@@ -609,17 +605,17 @@ func (g *Guardian) Listen(addr string) error {
 	}
 
 	// Graceful shutdown
-	go func() {
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-		<-sigChan
+	// go func() {
+	// 	sigChan := make(chan os.Signal, 1)
+	// 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	// 	<-sigChan
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	// 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// 	defer cancel()
 
-		srv.Shutdown(ctx)
-		g.db.Close()
-	}()
+	// 	srv.Shutdown(ctx)
+	// 	g.db.Close()
+	// }()
 
 	log.Printf("Guardian server starting on %s", addr)
 	return srv.ListenAndServe()
