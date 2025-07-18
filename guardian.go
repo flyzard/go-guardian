@@ -133,6 +133,8 @@ type Config struct {
 
 	// Feature flags
 	Features Features // Which features to enable (default: all)
+
+	OAuth *auth.OAuthConfig
 }
 
 type Guardian struct {
@@ -199,7 +201,7 @@ func (s *InMemoryStore) Save(r *http.Request, w http.ResponseWriter, session *se
 
 	// Generate session ID if new
 	if session.ID == "" {
-		session.ID = generateSessionID()
+		session.ID = auth.GenerateToken()
 	}
 
 	// Store in memory
@@ -221,11 +223,6 @@ func (s *InMemoryStore) Save(r *http.Request, w http.ResponseWriter, session *se
 
 func (s *InMemoryStore) Options(options *sessions.Options) {
 	s.options = options
-}
-
-func generateSessionID() string {
-	// Use the same token generation as auth
-	return auth.GenerateToken()
 }
 
 func New(cfg Config) *Guardian {
@@ -513,6 +510,7 @@ func New(cfg Config) *Guardian {
 			RBAC:              cfg.Features.RBAC,
 			ExternalAuth:      cfg.Features.ExternalAuth,
 		},
+		OAuth: cfg.OAuth,
 	})
 
 	// Initialize router

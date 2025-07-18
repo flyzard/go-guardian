@@ -1,9 +1,9 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 
+	"github.com/flyzard/go-guardian/auth"
 	"github.com/gorilla/sessions"
 )
 
@@ -17,18 +17,23 @@ func RequireAuth(store sessions.Store) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			session, err := store.Get(r, "auth-session")
 			if err != nil {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				handleUnauthorized(w, r)
 				return
 			}
 
 			userID, ok := session.Values["user_id"]
 			if !ok || userID == nil {
-				http.Redirect(w, r, "/login", http.StatusSeeOther)
+				handleUnauthorized(w, r)
 				return
 			}
 
-			// Add user ID to context
-			ctx := context.WithValue(r.Context(), userContextKey, userID)
+			// Add user data to context
+			user := &auth.User{
+				ID:    userID.(int64),
+				Email: getStringValue(session.Values["email"]),
+			}
+
+			ctx := auth.WithUser(r.Context(), user)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
@@ -38,4 +43,43 @@ func RequireAuth(store sessions.Store) func(http.Handler) http.Handler {
 func GetUserID(r *http.Request) (int64, bool) {
 	userID, ok := r.Context().Value(userContextKey).(int64)
 	return userID, ok
+}
+
+// OptionalAuth allows access without authentication
+func OptionalAuth(store sessions.Store) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			session, _ := store.Get(r, "auth-session")
+
+			if userID, ok := session.Values["user_id"]; ok && userID != nil {
+				user := &auth.User{
+					ID:    userID.(int64),
+					Email: getStringValue(session.Values["email"]),
+				}
+
+				ctx := auth.WithUser(r.Context(), user)
+				r = r.WithContext(ctx)
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func handleUnauthorized(w http.ResponseWriter, r *http.Request) {
+	// HTMX-aware unauthorized handling
+	if r.Header.Get("HX-Request") == "true" {
+		w.Header().Set("HX-Redirect", "/login")
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func getStringValue(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }

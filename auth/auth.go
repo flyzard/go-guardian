@@ -105,14 +105,17 @@ type ServiceConfig struct {
 	TableNames  TableConfig
 	ColumnNames ColumnConfig
 	Features    FeatureConfig
+	OAuth       *OAuthConfig
 }
 
 type Service struct {
-	store    sessions.Store
-	db       *sql.DB
-	tables   TableConfig
-	columns  ColumnConfig
-	features FeatureConfig
+	store          sessions.Store
+	db             *sql.DB
+	tables         TableConfig
+	columns        ColumnConfig
+	features       FeatureConfig
+	oauthProviders map[string]*OAuthProvider
+	oauthConfig    *OAuthConfig
 }
 
 type User struct {
@@ -149,13 +152,21 @@ func NewServiceWithConfig(cfg ServiceConfig) *Service {
 		cfg.Features = DefaultFeatureConfig()
 	}
 
-	return &Service{
+	service := &Service{
 		store:    cfg.Store,
 		db:       cfg.DB,
 		tables:   cfg.TableNames,
 		columns:  cfg.ColumnNames,
 		features: cfg.Features,
 	}
+
+	// Initialize OAuth if external auth is enabled
+	if cfg.Features.ExternalAuth && cfg.OAuth != nil {
+		service.oauthProviders = cfg.OAuth.Providers
+		service.oauthConfig = cfg.OAuth
+	}
+
+	return service
 }
 
 func (s *Service) Login(w http.ResponseWriter, r *http.Request, email, password string) error {
