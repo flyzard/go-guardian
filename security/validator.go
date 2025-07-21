@@ -34,7 +34,7 @@ type NewPasswordInput struct {
 }
 
 // ValidateInput validates any struct with validation tags
-func ValidateInput(input interface{}) error {
+func ValidateInput(input any) error {
 	return validate.Struct(input)
 }
 
