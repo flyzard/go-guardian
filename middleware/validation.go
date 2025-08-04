@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"github.com/flyzard/go-guardian/response"
 	"github.com/flyzard/go-guardian/web"
 )
 
@@ -18,11 +19,12 @@ func ParamValidation(validators ...ValidationFunc) func(http.Handler) http.Handl
 				if err := validator(r); err != nil {
 					// Check if it's already a WebError
 					if webErr, ok := web.IsWebError(err); ok {
-						web.NewResponse(w).WebError(webErr).Send()
+						response.New(w, r).ErrorWithStatus(webErr, webErr.StatusCode).Send()
 					} else {
 						// Wrap in a validation error
-						web.NewResponse(w).WebError(
+						response.New(w, r).ErrorWithStatus(
 							web.Validation("Invalid request parameters").WithDetails(err.Error()),
+							http.StatusBadRequest,
 						).Send()
 					}
 					return

@@ -362,9 +362,11 @@ func TestFeatureFlags(t *testing.T) {
 	// Test 3: Feature disabled methods return errors
 	t.Run("DisabledFeatureErrors", func(t *testing.T) {
 		app := New(Config{
-			SessionKey:   []byte("test-secret-key-32-bytes-long!!!"),
-			DatabaseType: "sqlite",
-			DatabasePath: ":memory:",
+			SessionKey:     []byte("test-secret-key-32-bytes-long!!!"),
+			DatabaseType:   "sqlite",
+			DatabasePath:   ":memory:",
+			AutoMigrate:    false,
+			ValidateSchema: false, // Disable schema validation for minimal setup
 			Features: Features{
 				EmailVerification: false,
 				PasswordReset:     false,

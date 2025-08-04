@@ -5,28 +5,11 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flyzard/go-guardian/htmx"
+	"github.com/flyzard/go-guardian/response"
 	"github.com/flyzard/go-guardian/web"
 )
 
-// HTMXContextKey is the context key for HTMX request data
-type HTMXContextKey string
-
-const (
-	// HTMXRequestKey is the context key for HTMX request information
-	HTMXRequestKey HTMXContextKey = "htmx_request"
-)
-
-// HTMXRequestInfo contains information about an HTMX request
-type HTMXRequestInfo struct {
-	IsHTMX         bool
-	IsBoosted      bool
-	Target         string
-	TriggerName    string
-	TriggerID      string
-	CurrentURL     string
-	Prompt         string
-	HistoryRestore bool
-}
 
 // HTMXConfig holds HTMX middleware configuration
 type HTMXConfig struct {
@@ -54,34 +37,25 @@ func DefaultHTMXConfig() HTMXConfig {
 func HTMX(config HTMXConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Parse HTMX request information
-			info := &HTMXRequestInfo{
-				IsHTMX:         r.Header.Get("HX-Request") == "true",
-				IsBoosted:      r.Header.Get("HX-Boosted") == "true",
-				Target:         r.Header.Get("HX-Target"),
-				TriggerName:    r.Header.Get("HX-Trigger-Name"),
-				TriggerID:      r.Header.Get("HX-Trigger"),
-				CurrentURL:     r.Header.Get("HX-Current-URL"),
-				Prompt:         r.Header.Get("HX-Prompt"),
-				HistoryRestore: r.Header.Get("HX-History-Restore-Request") == "true",
-			}
+			// Parse HTMX request information using centralized package
+			info := htmx.GetRequestInfo(r)
 
 			// Add HTMX info to context
 			if info.IsHTMX {
-				ctx := context.WithValue(r.Context(), HTMXRequestKey, info)
+				ctx := context.WithValue(r.Context(), htmx.RequestInfoKey, info)
 				r = r.WithContext(ctx)
 			}
 
 			// Include CSRF token in response headers for HTMX requests
 			if config.IncludeCSRFHeader && info.IsHTMX {
 				if cookie, err := r.Cookie("csrf_token"); err == nil {
-					w.Header().Set("X-CSRF-Token", cookie.Value)
+					htmx.SetCSRFToken(w, cookie.Value)
 				}
 			}
 
 			// Auto push URL for non-boosted HTMX requests
 			if config.PushURL && info.IsHTMX && !info.IsBoosted {
-				w.Header().Set("HX-Push-Url", r.URL.Path)
+				htmx.SetPushURL(w, r.URL.Path)
 			}
 
 			// Wrap response writer for error handling
@@ -109,8 +83,8 @@ type htmxResponseWriter struct {
 func (w *htmxResponseWriter) WriteHeader(code int) {
 	if !w.wroteHeader && w.isHTMX && code >= 400 {
 		// Auto-retarget errors to body for HTMX requests
-		w.Header().Set("HX-Retarget", "body")
-		w.Header().Set("HX-Reswap", w.config.ErrorSwapMethod)
+		htmx.SetRetarget(w, "body")
+		htmx.SetReswap(w, w.config.ErrorSwapMethod)
 	}
 	w.wroteHeader = true
 	w.ResponseWriter.WriteHeader(code)
@@ -123,19 +97,15 @@ func (w *htmxResponseWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// GetHTMXInfo retrieves HTMX request information from context
-func GetHTMXInfo(r *http.Request) (*HTMXRequestInfo, bool) {
-	info, ok := r.Context().Value(HTMXRequestKey).(*HTMXRequestInfo)
-	return info, ok
-}
 
 // RequireHTMX ensures the request is from HTMX, otherwise returns an error
 func RequireHTMX() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !web.IsHTMX(r) {
-				web.NewResponse(w).WebError(
+			if !htmx.IsRequest(r) {
+				response.New(w, r).ErrorWithStatus(
 					web.BadRequest("This endpoint requires an HTMX request"),
+					http.StatusBadRequest,
 				).Send()
 				return
 			}
@@ -151,9 +121,10 @@ var HTMXOnly = RequireHTMX
 func PartialOnly() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !web.IsHTMX(r) || web.IsBoosted(r) {
-				web.NewResponse(w).WebError(
+			if !htmx.IsPartialRequest(r) {
+				response.New(w, r).ErrorWithStatus(
 					web.BadRequest("This endpoint only serves partial content"),
+					http.StatusBadRequest,
 				).Send()
 				return
 			}
@@ -171,18 +142,20 @@ func HTMXTrigger(allowedTriggers ...string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			info, ok := GetHTMXInfo(r)
+			info, ok := htmx.FromContext(r.Context())
 			if !ok || !info.IsHTMX {
-				web.NewResponse(w).WebError(
+				response.New(w, r).ErrorWithStatus(
 					web.BadRequest("This endpoint requires an HTMX request"),
+					http.StatusBadRequest,
 				).Send()
 				return
 			}
 
 			// Check both trigger name and ID
 			if !triggerMap[info.TriggerName] && !triggerMap[info.TriggerID] {
-				web.NewResponse(w).WebError(
+				response.New(w, r).ErrorWithStatus(
 					web.BadRequest("Invalid trigger for this endpoint"),
+					http.StatusBadRequest,
 				).Send()
 				return
 			}
@@ -201,17 +174,19 @@ func HTMXTarget(allowedTargets ...string) func(http.Handler) http.Handler {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			info, ok := GetHTMXInfo(r)
+			info, ok := htmx.FromContext(r.Context())
 			if !ok || !info.IsHTMX {
-				web.NewResponse(w).WebError(
+				response.New(w, r).ErrorWithStatus(
 					web.BadRequest("This endpoint requires an HTMX request"),
+					http.StatusBadRequest,
 				).Send()
 				return
 			}
 
 			if !targetMap[info.Target] {
-				web.NewResponse(w).WebError(
+				response.New(w, r).ErrorWithStatus(
 					web.BadRequest("Invalid target for this endpoint"),
+					http.StatusBadRequest,
 				).Send()
 				return
 			}
@@ -226,7 +201,7 @@ func VaryHTMX(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Add HTMX headers to Vary to ensure proper caching
 		existing := w.Header().Get("Vary")
-		htmxHeaders := []string{"HX-Request", "HX-Boosted", "HX-Target"}
+		htmxHeaders := []string{htmx.HeaderRequest, htmx.HeaderBoosted, htmx.HeaderTarget}
 		
 		if existing == "" {
 			w.Header().Set("Vary", strings.Join(htmxHeaders, ", "))

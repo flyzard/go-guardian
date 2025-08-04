@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/flyzard/go-guardian/htmx"
 )
 
 func TestRouterParameterInjection(t *testing.T) {
@@ -68,19 +70,20 @@ func TestContextHTMXHeaders(t *testing.T) {
 	r.Header.Set("HX-Request", "true")
 	r.Header.Set("HX-Trigger", "button-1")
 
-	ctx := NewContext(w, r)
-
-	if !ctx.IsHTMX() {
+	// Use htmx package directly instead of deprecated Context methods
+	// Context is still created but not used for HTMX operations
+	_ = NewContext(w, r)
+	if !htmx.IsRequest(r) {
 		t.Error("Failed to detect HTMX request")
 	}
 
-	if ctx.GetTrigger() != "button-1" {
+	if htmx.GetTrigger(r) != "button-1" {
 		t.Error("Failed to get HTMX trigger")
 	}
 
-	// Test HTMX response headers
-	ctx.HXRedirect("/new-page")
-	ctx.HXTrigger("event1")
+	// Test HTMX response headers using htmx package
+	htmx.SetRedirect(w, "/new-page")
+	htmx.SetTrigger(w, "event1")
 
 	if w.Header().Get("HX-Redirect") != "/new-page" {
 		t.Error("Failed to set HX-Redirect header")

@@ -37,6 +37,7 @@ func (e *WebError) Error() string {
 	return e.Message
 }
 
+
 // WithDetails adds details to the error
 func (e *WebError) WithDetails(details string) *WebError {
 	e.Details = details

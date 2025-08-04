@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/flyzard/go-guardian/auth"
+	"github.com/flyzard/go-guardian/htmx"
 	"github.com/gorilla/sessions"
 )
 
@@ -68,8 +69,8 @@ func OptionalAuth(store sessions.Store) func(http.Handler) http.Handler {
 
 func handleUnauthorized(w http.ResponseWriter, r *http.Request) {
 	// HTMX-aware unauthorized handling
-	if r.Header.Get("HX-Request") == "true" {
-		w.Header().Set("HX-Redirect", "/login")
+	if htmx.IsRequest(r) {
+		htmx.SetRedirect(w, "/login")
 		w.WriteHeader(http.StatusUnauthorized)
 		return
 	}

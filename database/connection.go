@@ -4,33 +4,14 @@ import (
 	"database/sql"
 	"time"
 
+	"github.com/flyzard/go-guardian/config"
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// TableMapping defines custom table names
-type TableMapping struct {
-	Users           string
-	Tokens          string
-	Sessions        string
-	Roles           string
-	Permissions     string
-	RolePermissions string
-	RememberTokens  string
-}
+// TableMapping is an alias to config.TableNames for backward compatibility
+type TableMapping = config.TableNames
 
-// DefaultTableMapping returns the default table names
-func DefaultTableMapping() TableMapping {
-	return TableMapping{
-		Users:           "users",
-		Tokens:          "tokens",
-		Sessions:        "sessions",
-		Roles:           "roles",
-		Permissions:     "permissions",
-		RolePermissions: "role_permissions",
-		RememberTokens:  "remember_tokens",
-	}
-}
 
 type DB struct {
 	*sql.DB
@@ -62,7 +43,7 @@ func NewSQLite(path string) (*DB, error) {
 		Path:           path,
 		AutoMigrate:    true,
 		MigrationTable: "migrations",
-		TableNames:     DefaultTableMapping(),
+		TableNames:     config.DefaultTableNames(),
 	})
 }
 
@@ -89,7 +70,10 @@ func NewSQLiteWithConfig(cfg SQLiteConfig) (*DB, error) {
 
 	// Set defaults
 	if cfg.TableNames == (TableMapping{}) {
-		cfg.TableNames = DefaultTableMapping()
+		cfg.TableNames = config.DefaultTableNames()
+	} else {
+		// Apply defaults to missing fields
+		config.ApplyDefaults(&cfg.TableNames, config.DefaultTableNames())
 	}
 	if cfg.MigrationTable == "" {
 		cfg.MigrationTable = "migrations"
@@ -122,7 +106,10 @@ func NewMySQL(cfg MySQLConfig) (*DB, error) {
 		cfg.AutoMigrate = true
 	}
 	if cfg.TableNames == (TableMapping{}) {
-		cfg.TableNames = DefaultTableMapping()
+		cfg.TableNames = config.DefaultTableNames()
+	} else {
+		// Apply defaults to missing fields
+		config.ApplyDefaults(&cfg.TableNames, config.DefaultTableNames())
 	}
 	return NewMySQLWithConfig(cfg)
 }
@@ -162,7 +149,10 @@ func NewMySQLWithConfig(cfg MySQLConfig) (*DB, error) {
 
 	// Set defaults
 	if cfg.TableNames == (TableMapping{}) {
-		cfg.TableNames = DefaultTableMapping()
+		cfg.TableNames = config.DefaultTableNames()
+	} else {
+		// Apply defaults to missing fields
+		config.ApplyDefaults(&cfg.TableNames, config.DefaultTableNames())
 	}
 	if cfg.MigrationTable == "" {
 		cfg.MigrationTable = "migrations"
@@ -202,7 +192,7 @@ func (db *DB) MigrationTable() string {
 
 func (db *DB) TableNames() TableMapping {
 	if db.tableNames == (TableMapping{}) {
-		return DefaultTableMapping()
+		return config.DefaultTableNames()
 	}
 	return db.tableNames
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/flyzard/go-guardian/config"
 	"github.com/gorilla/sessions"
 )
 
@@ -17,87 +18,14 @@ var (
 	ErrFeatureDisabled    = errors.New("feature is disabled")
 )
 
-// TableConfig defines table names for auth operations
-type TableConfig struct {
-	Users           string
-	Tokens          string
-	Sessions        string
-	Roles           string
-	Permissions     string
-	RolePermissions string
-	RememberTokens  string
-}
+// TableConfig is an alias to config.TableNames
+type TableConfig = config.TableNames
 
-// DefaultTableConfig returns the default table names
-func DefaultTableConfig() TableConfig {
-	return TableConfig{
-		Users:           "users",
-		Tokens:          "tokens",
-		Sessions:        "sessions",
-		Roles:           "roles",
-		Permissions:     "permissions",
-		RolePermissions: "role_permissions",
-		RememberTokens:  "remember_tokens",
-	}
-}
+// ColumnConfig is an alias to config.FlatColumnNames
+type ColumnConfig = config.FlatColumnNames
 
-// ColumnConfig maps Guardian's expected columns to actual database columns
-type ColumnConfig struct {
-	// Users table columns
-	UserID       string // Default: "id"
-	UserEmail    string // Default: "email"
-	UserPassword string // Default: "password_hash"
-	UserVerified string // Default: "verified"
-	UserCreated  string // Default: "created_at"
-	UserRoleID   string // Default: "role_id"
-
-	// Tokens table columns (if using email verification or password reset)
-	TokenID      string // Default: "id"
-	TokenValue   string // Default: "token"
-	TokenUserID  string // Default: "user_id"
-	TokenPurpose string // Default: "purpose"
-	TokenExpires string // Default: "expires_at"
-	TokenCreated string // Default: "created_at"
-}
-
-// DefaultColumnConfig returns the default column names
-func DefaultColumnConfig() ColumnConfig {
-	return ColumnConfig{
-		UserID:       "id",
-		UserEmail:    "email",
-		UserPassword: "password_hash",
-		UserVerified: "verified",
-		UserCreated:  "created_at",
-		UserRoleID:   "role_id",
-
-		TokenID:      "id",
-		TokenValue:   "token",
-		TokenUserID:  "user_id",
-		TokenPurpose: "purpose",
-		TokenExpires: "expires_at",
-		TokenCreated: "created_at",
-	}
-}
-
-// FeatureConfig defines which features are enabled
-type FeatureConfig struct {
-	EmailVerification bool
-	PasswordReset     bool
-	RememberMe        bool
-	RBAC              bool
-	ExternalAuth      bool // New: Allow external authentication (SSO, LDAP, etc.)
-}
-
-// DefaultFeatureConfig returns all features enabled
-func DefaultFeatureConfig() FeatureConfig {
-	return FeatureConfig{
-		EmailVerification: true,
-		PasswordReset:     true,
-		RememberMe:        true,
-		RBAC:              true,
-		ExternalAuth:      false,
-	}
-}
+// FeatureConfig is an alias to config.Features
+type FeatureConfig = config.Features
 
 type ServiceConfig struct {
 	Store       sessions.Store
@@ -131,9 +59,9 @@ func NewService(store sessions.Store, db *sql.DB) *Service {
 	return NewServiceWithConfig(ServiceConfig{
 		Store:       store,
 		DB:          db,
-		TableNames:  DefaultTableConfig(),
-		ColumnNames: DefaultColumnConfig(),
-		Features:    DefaultFeatureConfig(),
+		TableNames:  config.DefaultTableNames(),
+		ColumnNames: config.DefaultFlatColumnNames(),
+		Features:    config.DefaultFeatures(),
 	})
 }
 
@@ -141,15 +69,29 @@ func NewService(store sessions.Store, db *sql.DB) *Service {
 func NewServiceWithConfig(cfg ServiceConfig) *Service {
 	// Set defaults if not provided
 	if cfg.TableNames == (TableConfig{}) {
-		cfg.TableNames = DefaultTableConfig()
+		cfg.TableNames = config.DefaultTableNames()
+	} else {
+		// Apply defaults to missing fields
+		config.ApplyDefaults(&cfg.TableNames, config.DefaultTableNames())
 	}
 
 	if cfg.ColumnNames == (ColumnConfig{}) {
-		cfg.ColumnNames = DefaultColumnConfig()
+		cfg.ColumnNames = config.DefaultFlatColumnNames()
+	} else {
+		// Apply defaults to missing fields
+		config.ApplyDefaults(&cfg.ColumnNames, config.DefaultFlatColumnNames())
 	}
 
-	if cfg.Features == (FeatureConfig{}) {
-		cfg.Features = DefaultFeatureConfig()
+	// Don't apply defaults to Features - respect explicit false values
+	// Only use defaults if no features were set at all
+	allFeaturesZero := !cfg.Features.EmailVerification && 
+		!cfg.Features.PasswordReset && 
+		!cfg.Features.RememberMe && 
+		!cfg.Features.RBAC && 
+		!cfg.Features.ExternalAuth
+	
+	if allFeaturesZero {
+		cfg.Features = config.DefaultFeatures()
 	}
 
 	service := &Service{

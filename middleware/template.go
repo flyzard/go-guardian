@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 	
-	"github.com/flyzard/go-guardian/web"
+	"github.com/flyzard/go-guardian/response"
 	"github.com/flyzard/go-guardian/web/template"
 )
 
@@ -94,8 +94,8 @@ type templateResponseWriter struct {
 }
 
 // NewResponseBuilder creates a response builder with template support
-func (w *templateResponseWriter) NewResponseBuilder() *web.ResponseBuilder {
-	return web.NewResponse(w.ResponseWriter).WithTemplateManager(w.templateManager)
+func (w *templateResponseWriter) NewResponseBuilder() response.Response {
+	return response.New(w.ResponseWriter, nil)
 }
 
 // Helper functions for common template operations

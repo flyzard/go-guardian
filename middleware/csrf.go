@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"log"
 	"net/http"
+
+	"github.com/flyzard/go-guardian/htmx"
 )
 
 const (
@@ -44,8 +46,8 @@ func CSRFWithConfig(config CSRFConfig) func(http.Handler) http.Handler {
 					http.SetCookie(w, cookie)
 
 					// For HTMX requests, also set the token in response header
-					if r.Header.Get("HX-Request") == "true" {
-						w.Header().Set("X-CSRF-Token", token)
+					if htmx.IsRequest(r) {
+						htmx.SetCSRFToken(w, token)
 					}
 
 					log.Printf("CSRF: Set new token for %s", r.URL.Path)
@@ -61,7 +63,7 @@ func CSRFWithConfig(config CSRFConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Check header first (supports both X-CSRF-Token and HX-Trigger for HTMX)
+			// Check header first (supports CSRF token in header for HTMX)
 			token := r.Header.Get(csrfHeaderName)
 
 			// If no header, check form value
@@ -73,9 +75,9 @@ func CSRFWithConfig(config CSRFConfig) func(http.Handler) http.Handler {
 				log.Printf("CSRF mismatch - Cookie: %s, Token: %s", cookie.Value, token)
 
 				// For HTMX requests, return a more helpful error
-				if r.Header.Get("HX-Request") == "true" {
-					w.Header().Set("HX-Retarget", "body")
-					w.Header().Set("HX-Reswap", "innerHTML")
+				if htmx.IsRequest(r) {
+					htmx.SetRetarget(w, "body")
+					htmx.SetReswap(w, htmx.SwapInnerHTML)
 					http.Error(w, `<div class="alert alert-error">Security error: Please refresh the page and try again.</div>`, http.StatusForbidden)
 					return
 				}
@@ -85,8 +87,8 @@ func CSRFWithConfig(config CSRFConfig) func(http.Handler) http.Handler {
 			}
 
 			// For HTMX requests, include the token in response
-			if r.Header.Get("HX-Request") == "true" {
-				w.Header().Set("X-CSRF-Token", cookie.Value)
+			if htmx.IsRequest(r) {
+				htmx.SetCSRFToken(w, cookie.Value)
 			}
 
 			next.ServeHTTP(w, r)

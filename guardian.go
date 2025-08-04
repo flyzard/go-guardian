@@ -1,13 +1,18 @@
 package guardian
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/flyzard/go-guardian/auth"
+	"github.com/flyzard/go-guardian/config"
 	"github.com/flyzard/go-guardian/database"
+	"github.com/flyzard/go-guardian/plugin"
+	authPlugin "github.com/flyzard/go-guardian/plugins/auth"
+	csrfPlugin "github.com/flyzard/go-guardian/plugins/csrf"
 	"github.com/flyzard/go-guardian/router"
 	"github.com/gorilla/sessions"
 )
@@ -21,88 +26,17 @@ const (
 	SessionBackendDatabase SessionBackend = "database" // Database-backed sessions
 )
 
-// TableNames allows customizing table names
-type TableNames struct {
-	Users           string
-	Tokens          string // Only required if using email verification or password reset
-	Sessions        string // Only required if using database sessions
-	Roles           string
-	Permissions     string
-	RolePermissions string
-	RememberTokens  string
-}
+// TableNames is an alias to config.TableNames for backward compatibility
+type TableNames = config.TableNames
 
-// DefaultTableNames returns the default table names
-func DefaultTableNames() TableNames {
-	return TableNames{
-		Users:           "users",
-		Tokens:          "tokens",
-		Sessions:        "sessions",
-		Roles:           "roles",
-		Permissions:     "permissions",
-		RolePermissions: "role_permissions",
-		RememberTokens:  "remember_tokens",
-	}
-}
 
-// ColumnNames allows customizing column names
-type ColumnNames struct {
-	// Users table columns
-	UserID       string
-	UserEmail    string
-	UserPassword string
-	UserVerified string
-	UserCreated  string
-	UserRoleID   string
+// ColumnNames is an alias to config.FlatColumnNames for backward compatibility
+type ColumnNames = config.FlatColumnNames
 
-	// Tokens table columns
-	TokenID      string
-	TokenValue   string
-	TokenUserID  string
-	TokenPurpose string
-	TokenExpires string
-	TokenCreated string
-}
 
-// DefaultColumnNames returns the default column names
-func DefaultColumnNames() ColumnNames {
-	return ColumnNames{
-		UserID:       "id",
-		UserEmail:    "email",
-		UserPassword: "password_hash",
-		UserVerified: "verified",
-		UserCreated:  "created_at",
-		UserRoleID:   "role_id",
+// Features is an alias to config.Features for backward compatibility
+type Features = config.Features
 
-		TokenID:      "id",
-		TokenValue:   "token",
-		TokenUserID:  "user_id",
-		TokenPurpose: "purpose",
-		TokenExpires: "expires_at",
-		TokenCreated: "created_at",
-	}
-}
-
-// Features allows disabling optional features
-type Features struct {
-	EmailVerification bool // Requires tokens table
-	PasswordReset     bool // Requires tokens table
-	RememberMe        bool // Requires remember_tokens table
-	RBAC              bool // Requires roles, permissions tables
-	ExternalAuth      bool // Enable external authentication (SSO, LDAP, etc.)
-}
-
-// DefaultFeatures returns all features enabled
-// This maintains backward compatibility - existing apps get all features
-func DefaultFeatures() Features {
-	return Features{
-		EmailVerification: true,
-		PasswordReset:     true,
-		RememberMe:        true,
-		RBAC:              true,
-		ExternalAuth:      false,
-	}
-}
 
 type Config struct {
 	SessionKey  []byte
@@ -134,15 +68,21 @@ type Config struct {
 	// Feature flags
 	Features Features // Which features to enable (default: all)
 
+	// Plugin system (new in v2)
+	EnablePluginSystem bool // Enable the new plugin architecture (default: false)
+	Plugins            []string // List of plugins to enable (when EnablePluginSystem is true)
+
 	OAuth *auth.OAuthConfig
 }
 
 type Guardian struct {
-	router   *router.Router
-	db       *database.DB
-	auth     *auth.Service
-	sessions sessions.Store
-	config   Config
+	router         *router.Router
+	db             *database.DB
+	auth           *auth.Service
+	sessions       sessions.Store
+	config         Config
+	pluginRegistry *plugin.Registry // New: plugin registry
+	routesSetup    bool             // Track if routes have been setup
 }
 
 // InMemoryStore implements a simple in-memory session store
@@ -254,82 +194,81 @@ func New(cfg Config) *Guardian {
 		cfg.MigrationTable = "migrations"
 	}
 
-	// Set default features if not provided
-	if cfg.Features == (Features{}) {
-		cfg.Features = DefaultFeatures()
+	// Only set default features if NO features were specified at all
+	// We check if all fields are false AND ExternalAuth is also false, which indicates
+	// the user didn't set any features explicitly
+	allFeaturesZero := !cfg.Features.EmailVerification && 
+		!cfg.Features.PasswordReset && 
+		!cfg.Features.RememberMe && 
+		!cfg.Features.RBAC && 
+		!cfg.Features.ExternalAuth
+	
+	if allFeaturesZero {
+		// User didn't specify any features, use defaults
+		cfg.Features = config.DefaultFeatures()
 	}
+	// Otherwise, respect the user's explicit feature configuration
 
-	// Set default table names if not provided
+	// Set default table names based on enabled features
+	defaults := config.DefaultTableNames()
 	if cfg.TableNames == (TableNames{}) {
-		cfg.TableNames = DefaultTableNames()
+		// Only set defaults for tables that are actually needed
+		cfg.TableNames.Users = defaults.Users // Always needed
+		
+		if cfg.Features.EmailVerification || cfg.Features.PasswordReset {
+			cfg.TableNames.Tokens = defaults.Tokens
+		}
+		if cfg.SessionBackend == SessionBackendDatabase {
+			cfg.TableNames.Sessions = defaults.Sessions
+		}
+		if cfg.Features.RBAC {
+			cfg.TableNames.Roles = defaults.Roles
+			cfg.TableNames.Permissions = defaults.Permissions
+			cfg.TableNames.RolePermissions = defaults.RolePermissions
+		}
+		if cfg.Features.RememberMe {
+			cfg.TableNames.RememberTokens = defaults.RememberTokens
+		}
 	} else {
-		// Fill in any missing table names with defaults
-		defaults := DefaultTableNames()
+		// Apply defaults to missing fields
 		if cfg.TableNames.Users == "" {
 			cfg.TableNames.Users = defaults.Users
 		}
-		if cfg.TableNames.Tokens == "" {
-			cfg.TableNames.Tokens = defaults.Tokens
+		// Only set defaults for tables that are needed based on features
+		if cfg.Features.EmailVerification || cfg.Features.PasswordReset {
+			if cfg.TableNames.Tokens == "" {
+				cfg.TableNames.Tokens = defaults.Tokens
+			}
 		}
-		if cfg.TableNames.Sessions == "" {
-			cfg.TableNames.Sessions = defaults.Sessions
+		if cfg.SessionBackend == SessionBackendDatabase {
+			if cfg.TableNames.Sessions == "" {
+				cfg.TableNames.Sessions = defaults.Sessions
+			}
 		}
-		if cfg.TableNames.Roles == "" {
-			cfg.TableNames.Roles = defaults.Roles
+		if cfg.Features.RBAC {
+			if cfg.TableNames.Roles == "" {
+				cfg.TableNames.Roles = defaults.Roles
+			}
+			if cfg.TableNames.Permissions == "" {
+				cfg.TableNames.Permissions = defaults.Permissions
+			}
+			if cfg.TableNames.RolePermissions == "" {
+				cfg.TableNames.RolePermissions = defaults.RolePermissions
+			}
 		}
-		if cfg.TableNames.Permissions == "" {
-			cfg.TableNames.Permissions = defaults.Permissions
-		}
-		if cfg.TableNames.RolePermissions == "" {
-			cfg.TableNames.RolePermissions = defaults.RolePermissions
-		}
-		if cfg.TableNames.RememberTokens == "" {
-			cfg.TableNames.RememberTokens = defaults.RememberTokens
+		if cfg.Features.RememberMe {
+			if cfg.TableNames.RememberTokens == "" {
+				cfg.TableNames.RememberTokens = defaults.RememberTokens
+			}
 		}
 	}
 
 	// Set default column names if not provided
 	if cfg.ColumnNames == (ColumnNames{}) {
-		cfg.ColumnNames = DefaultColumnNames()
+		cfg.ColumnNames = config.DefaultFlatColumnNames()
 	} else {
-		// Fill in any missing column names with defaults
-		defaults := DefaultColumnNames()
-		if cfg.ColumnNames.UserID == "" {
-			cfg.ColumnNames.UserID = defaults.UserID
-		}
-		if cfg.ColumnNames.UserEmail == "" {
-			cfg.ColumnNames.UserEmail = defaults.UserEmail
-		}
-		if cfg.ColumnNames.UserPassword == "" {
-			cfg.ColumnNames.UserPassword = defaults.UserPassword
-		}
-		if cfg.ColumnNames.UserVerified == "" {
-			cfg.ColumnNames.UserVerified = defaults.UserVerified
-		}
-		if cfg.ColumnNames.UserCreated == "" {
-			cfg.ColumnNames.UserCreated = defaults.UserCreated
-		}
-		if cfg.ColumnNames.UserRoleID == "" {
-			cfg.ColumnNames.UserRoleID = defaults.UserRoleID
-		}
-		if cfg.ColumnNames.TokenID == "" {
-			cfg.ColumnNames.TokenID = defaults.TokenID
-		}
-		if cfg.ColumnNames.TokenValue == "" {
-			cfg.ColumnNames.TokenValue = defaults.TokenValue
-		}
-		if cfg.ColumnNames.TokenUserID == "" {
-			cfg.ColumnNames.TokenUserID = defaults.TokenUserID
-		}
-		if cfg.ColumnNames.TokenPurpose == "" {
-			cfg.ColumnNames.TokenPurpose = defaults.TokenPurpose
-		}
-		if cfg.ColumnNames.TokenExpires == "" {
-			cfg.ColumnNames.TokenExpires = defaults.TokenExpires
-		}
-		if cfg.ColumnNames.TokenCreated == "" {
-			cfg.ColumnNames.TokenCreated = defaults.TokenCreated
-		}
+		// Apply defaults to missing fields
+		config.ApplyDefaults(&cfg.ColumnNames, config.DefaultFlatColumnNames())
 	}
 
 	// Default to true for backward compatibility
@@ -516,33 +455,122 @@ func New(cfg Config) *Guardian {
 	// Initialize router
 	r := router.New()
 
-	return &Guardian{
-		router:   r,
-		db:       db,
-		auth:     authService,
-		sessions: sessionStore,
-		config:   cfg,
+	// Initialize plugin system if enabled
+	var pluginRegistry *plugin.Registry
+	if cfg.EnablePluginSystem {
+		// Create plugin context
+		pluginContext := &plugin.Context{
+			DB:           db,
+			SessionStore: sessionStore,
+			Config:       make(map[string]interface{}),
+		}
+		
+		// Create registry
+		pluginRegistry = plugin.NewRegistry(pluginContext)
+		
+		// Register built-in plugins
+		registerBuiltinPlugins(pluginRegistry)
+		
+		// Enable plugins based on configuration
+		if len(cfg.Plugins) > 0 {
+			// Use explicit plugin list
+			loader := plugin.NewLoader(pluginRegistry)
+			if err := loader.EnableList(cfg.Plugins); err != nil {
+				log.Printf("Warning: Some plugins failed to load: %v", err)
+			}
+		} else {
+			// Map features to plugins for backward compatibility
+			loader := plugin.NewLoader(pluginRegistry)
+			featureMap := map[string]bool{
+				"csrf":              true, // Always enable CSRF
+				"email_verification": cfg.Features.EmailVerification,
+				"password_reset":    cfg.Features.PasswordReset,
+				"remember_me":       cfg.Features.RememberMe,
+				"rbac":              cfg.Features.RBAC,
+				"external_auth":     cfg.Features.ExternalAuth,
+			}
+			
+			if err := loader.EnableFromFeatures(featureMap); err != nil {
+				log.Printf("Warning: Some plugins failed to load from features: %v", err)
+			}
+		}
+		
+		// Apply plugin middleware
+		for _, mw := range pluginRegistry.CollectMiddleware() {
+			r.Use(mw)
+		}
+		
+		// Don't register plugin routes yet - wait until after user middleware
+		// Routes will be registered on first route definition or ServeHTTP
+		
+		log.Printf("Plugin system enabled with %d active plugins", len(pluginRegistry.EnabledPlugins()))
 	}
+
+	return &Guardian{
+		router:         r,
+		db:             db,
+		auth:           authService,
+		sessions:       sessionStore,
+		config:         cfg,
+		pluginRegistry: pluginRegistry,
+	}
+}
+
+// setupPluginRoutes sets up plugin routes if not already done
+func (g *Guardian) setupPluginRoutes() {
+	if g.routesSetup || !g.config.EnablePluginSystem || g.pluginRegistry == nil {
+		return
+	}
+	
+	// Register plugin routes
+	for _, route := range g.pluginRegistry.CollectRoutes() {
+		// Apply route-specific middleware first
+		handler := route.Handler
+		for i := len(route.Middleware) - 1; i >= 0; i-- {
+			handler = route.Middleware[i](handler).ServeHTTP
+		}
+		
+		// Register with router
+		switch route.Method {
+		case "GET":
+			g.router.GET(route.Path, handler)
+		case "POST":
+			g.router.POST(route.Path, handler)
+		case "PUT":
+			g.router.PUT(route.Path, handler)
+		case "DELETE":
+			g.router.DELETE(route.Path, handler)
+		case "PATCH":
+			g.router.PATCH(route.Path, handler)
+		}
+	}
+	
+	g.routesSetup = true
 }
 
 // Router methods delegation
 func (g *Guardian) GET(pattern string, handler http.HandlerFunc) *router.Route {
+	g.setupPluginRoutes()
 	return g.router.GET(pattern, handler)
 }
 
 func (g *Guardian) POST(pattern string, handler http.HandlerFunc) *router.Route {
+	g.setupPluginRoutes()
 	return g.router.POST(pattern, handler)
 }
 
 func (g *Guardian) PUT(pattern string, handler http.HandlerFunc) *router.Route {
+	g.setupPluginRoutes()
 	return g.router.PUT(pattern, handler)
 }
 
 func (g *Guardian) DELETE(pattern string, handler http.HandlerFunc) *router.Route {
+	g.setupPluginRoutes()
 	return g.router.DELETE(pattern, handler)
 }
 
 func (g *Guardian) PATCH(pattern string, handler http.HandlerFunc) *router.Route {
+	g.setupPluginRoutes()
 	return g.router.PATCH(pattern, handler)
 }
 
@@ -551,6 +579,7 @@ func (g *Guardian) Use(middleware ...func(http.Handler) http.Handler) {
 }
 
 func (g *Guardian) Group(pattern string) *router.Group {
+	g.setupPluginRoutes()
 	return g.router.Group(pattern)
 }
 
@@ -577,6 +606,25 @@ func (g *Guardian) Features() Features {
 
 // IsFeatureEnabled checks if a specific feature is enabled
 func (g *Guardian) IsFeatureEnabled(feature string) bool {
+	// If plugin system is enabled, check plugin registry
+	if g.config.EnablePluginSystem && g.pluginRegistry != nil {
+		// Map feature names to plugin names
+		featureToPlugin := map[string]string{
+			"csrf":              "csrf",
+			"email_verification": "auth",
+			"password_reset":    "auth", 
+			"remember_me":       "auth",
+			"rbac":              "rbac",
+			"external_auth":     "external_auth",
+		}
+		
+		if pluginName, ok := featureToPlugin[feature]; ok {
+			return g.pluginRegistry.IsEnabled(pluginName)
+		}
+		return false
+	}
+	
+	// Legacy feature flag checking
 	switch feature {
 	case "email_verification":
 		return g.config.Features.EmailVerification
@@ -593,7 +641,55 @@ func (g *Guardian) IsFeatureEnabled(feature string) bool {
 	}
 }
 
+// Plugin returns the plugin registry (nil if plugin system is not enabled)
+func (g *Guardian) Plugin() *plugin.Registry {
+	return g.pluginRegistry
+}
+
+// EnablePlugin enables a plugin by name (only works if plugin system is enabled)
+func (g *Guardian) EnablePlugin(name string) error {
+	if !g.config.EnablePluginSystem {
+		return errors.New("plugin system is not enabled")
+	}
+	if g.pluginRegistry == nil {
+		return errors.New("plugin registry not initialized")
+	}
+	return g.pluginRegistry.Enable(name)
+}
+
+// DisablePlugin disables a plugin by name (only works if plugin system is enabled)  
+func (g *Guardian) DisablePlugin(name string) error {
+	if !g.config.EnablePluginSystem {
+		return errors.New("plugin system is not enabled")
+	}
+	if g.pluginRegistry == nil {
+		return errors.New("plugin registry not initialized")
+	}
+	return g.pluginRegistry.Disable(name)
+}
+
+// registerBuiltinPlugins registers all built-in plugins with the registry
+func registerBuiltinPlugins(registry *plugin.Registry) {
+	// Register CSRF plugin
+	if err := registry.Register(csrfPlugin.New()); err != nil {
+		log.Printf("Failed to register CSRF plugin: %v", err)
+	}
+	
+	// Register Auth plugin
+	if err := registry.Register(authPlugin.New()); err != nil {
+		log.Printf("Failed to register Auth plugin: %v", err)
+	}
+	
+	// Future plugins can be registered here
+	// Example:
+	// registry.Register(rbacPlugin.New())
+	// registry.Register(rateLimitPlugin.New())
+}
+
 func (g *Guardian) Listen(addr string) error {
+	// Ensure plugin routes are setup before serving
+	g.setupPluginRoutes()
+	
 	srv := &http.Server{
 		Addr:         addr,
 		Handler:      g.router,

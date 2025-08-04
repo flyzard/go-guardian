@@ -2,6 +2,8 @@
 
 A security-focused web framework for Go that makes secure web development simple, intuitive, and robust. Built on top of the high-performance Chi router, Go Guardian provides enterprise-grade security features while maintaining the simplicity and elegance of Go.
 
+**🆕 Version 2.0** - Now with unified response interface and modular plugin architecture! See the [Migration Guide](#migration-guide) for upgrading from v1.
+
 ## Table of Contents
 
 - [Introduction & Philosophy](#introduction--philosophy)
@@ -43,17 +45,20 @@ Unlike many web frameworks that add security as middleware layers, Go Guardian i
 
 ## Architecture Overview
 
-Go Guardian is built as a layered architecture:
+Go Guardian is built as a layered architecture with a modular plugin system:
 
 ```
 ┌─────────────────────────────────────────────────┐
 │                   Application                    │
 ├─────────────────────────────────────────────────┤
+│                 Plugin System                    │
+│    (CSRF, Auth, RBAC, Custom Plugins)          │
+├─────────────────────────────────────────────────┤
 │                  Web Features                    │
-│  (Handlers, Templates, Response Builders)        │
+│  (Unified Response, Handlers, Templates)         │
 ├─────────────────────────────────────────────────┤
 │                  Middleware                      │
-│  (Security, CSRF, Auth, Logging, HTMX)         │
+│  (Security, Logging, HTMX, Rate Limiting)       │
 ├─────────────────────────────────────────────────┤
 │                    Router                        │
 │         (Chi-based with Guardian extensions)     │
@@ -68,11 +73,13 @@ Go Guardian is built as a layered architecture:
 
 ### Key Components
 
-- **Guardian**: The main application instance that ties everything together
+- **Guardian**: The main application instance that coordinates all components
+- **Plugin System**: Modular architecture for extending functionality
+- **Response Interface**: Unified response builder with automatic HTMX support
 - **Router**: Extended Chi router with Guardian-specific features
 - **Auth**: Complete authentication system with pluggable backends
 - **Database**: Safe query builder with migration support
-- **Middleware**: Composable middleware for security, logging, and more (including WebSocket/SSE)
+- **Middleware**: Composable middleware for security, logging, and more
 - **Web**: Advanced handler patterns and template rendering
 
 ## Installation
@@ -224,8 +231,13 @@ type Config struct {
     MaxIdleConns     int          // Idle connection pool
     ConnMaxLifetime  time.Duration // Connection lifetime
     
-    // Features
-    Features         Features      // Feature flags
+    // Plugin System (New in v2)
+    EnablePluginSystem bool        // Enable the plugin architecture
+    Plugins           []string     // List of plugins to enable
+    PluginConfig      map[string]interface{} // Plugin-specific configuration
+    
+    // Features (Legacy - use plugins instead)
+    Features         Features      // Feature flags (deprecated)
     
     // Customization
     TableNames       TableNames    // Custom table names
@@ -241,9 +253,27 @@ type Config struct {
 }
 ```
 
-### Feature Flags
+### Feature Configuration
 
-Control which features are enabled and their database requirements:
+#### Plugin System (Recommended)
+
+The modern way to enable features using the plugin architecture:
+
+```go
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("your-32-byte-secret-key-here!!!"),
+    EnablePluginSystem: true,
+    Plugins: []string{
+        "csrf",    // CSRF protection
+        "auth",    // Authentication with email verification & password reset
+        "rbac",    // Role-based access control (coming soon)
+    },
+})
+```
+
+#### Legacy Feature Flags
+
+The feature flags system is maintained for backward compatibility:
 
 ```go
 type Features struct {
@@ -254,6 +284,8 @@ type Features struct {
     ExternalAuth      bool // Enables passwordless auth for SSO/LDAP
 }
 ```
+
+Note: When `EnablePluginSystem` is true, plugins take precedence over feature flags.
 
 #### Minimal Setup (External Auth Only)
 
@@ -1129,50 +1161,58 @@ handlers := web.NewHandlerFacade("/api").
 
 ### Response Builder
 
-Fluent API for building HTTP responses:
+Unified response interface with automatic HTMX detection:
 
 ```go
+import "github.com/flyzard/go-guardian/response"
+
 func handler(w http.ResponseWriter, r *http.Request) {
     // JSON response
-    web.NewResponse(w).
+    response.New(w, r).
         Status(http.StatusOK).
         JSON(map[string]interface{}{
             "users": users,
             "total": len(users),
-        })
+        }).
+        Send()
     
-    // HTML response with template
-    web.NewResponse(w).
-        HTML("users/list", map[string]interface{}{
-            "Users": users,
-        })
+    // HTML response (auto-detects HTMX requests)
+    response.New(w, r).
+        HTML("<h1>Users</h1>").
+        Send()
     
     // Error response
-    web.NewResponse(w).
-        Status(http.StatusBadRequest).
-        Error("Invalid input", map[string]string{
-            "email": "Email is required",
-            "age":   "Must be at least 18",
-        })
+    response.New(w, r).
+        ErrorWithStatus(fmt.Errorf("validation failed"), http.StatusBadRequest).
+        Send()
     
-    // File download
-    web.NewResponse(w).
-        Header("Content-Disposition", "attachment; filename=report.pdf").
-        File("./reports/monthly.pdf")
+    // Text response
+    response.New(w, r).
+        Text("Operation completed successfully").
+        Send()
     
-    // Chained headers
-    web.NewResponse(w).
+    // With custom headers
+    response.New(w, r).
         Header("X-Total-Count", strconv.Itoa(total)).
         Header("X-Page", strconv.Itoa(page)).
-        JSON(results)
+        JSON(results).
+        Send()
+    
+    // HTMX-specific features (auto-enabled for HTMX requests)
+    // The response builder automatically handles HX-Push-URL, HX-Trigger, etc.
 }
 ```
 
 ### Error Handling
 
-Structured error types with context:
+Simplified error handling with the unified response interface:
 
 ```go
+import (
+    "github.com/flyzard/go-guardian/response"
+    "github.com/flyzard/go-guardian/web"
+)
+
 // Define custom errors
 var (
     ErrUserNotFound = web.NotFound("User not found").
@@ -1189,35 +1229,29 @@ func getUser(w http.ResponseWriter, r *http.Request) {
     user, err := getUserByID(userID)
     if err != nil {
         if errors.Is(err, sql.ErrNoRows) {
-            web.NewResponse(w).WebError(
-                web.NotFound("User not found").
-                    WithField("id", userID),
-            )
+            response.New(w, r).
+                ErrorWithStatus(
+                    fmt.Errorf("user not found: %s", userID),
+                    http.StatusNotFound,
+                ).
+                Send()
             return
         }
         
-        web.NewResponse(w).WebError(
-            web.Internal("Database error").
-                WithDetails(err.Error()),
-        )
+        response.New(w, r).
+            Error(err).
+            Send()
         return
     }
     
-    web.NewResponse(w).JSON(user)
+    response.New(w, r).JSON(user).Send()
 }
 
 // Global error handler
 app.Use(middleware.ErrorHandler(func(w http.ResponseWriter, r *http.Request, err error) {
-    if webErr, ok := web.IsWebError(err); ok {
-        web.NewResponse(w).WebError(webErr)
-        return
-    }
-    
-    web.NewResponse(w).
-        Status(http.StatusInternalServerError).
-        JSON(map[string]string{
-            "error": "Internal server error",
-        })
+    response.New(w, r).
+        ErrorWithStatus(err, http.StatusInternalServerError).
+        Send()
 }))
 ```
 
@@ -1306,6 +1340,166 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
+## Plugin System
+
+Guardian v2 introduces a modular plugin architecture that replaces the monolithic feature flags system. Plugins provide a cleaner, more maintainable way to extend Guardian's functionality.
+
+### Enabling the Plugin System
+
+```go
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("your-32-byte-secret-key-here!!!"),
+    
+    // Enable the plugin system
+    EnablePluginSystem: true,
+    
+    // Specify which plugins to enable
+    Plugins: []string{"csrf", "auth"},
+})
+```
+
+### Built-in Plugins
+
+#### CSRF Plugin
+Provides CSRF protection using the double-submit cookie pattern:
+
+```go
+// Automatically enabled when plugin system is active
+// Adds CSRF middleware to all routes
+// Validates tokens in forms and AJAX requests
+```
+
+#### Auth Plugin
+Provides complete authentication system:
+
+```go
+// Handles user registration, login, logout
+// Provides password reset and email verification endpoints
+// Integrates with session management
+
+// Routes added by auth plugin:
+// POST /auth/login
+// POST /auth/logout
+// POST /auth/register
+// POST /auth/password/reset
+// GET  /auth/verify
+```
+
+### Plugin Configuration
+
+Plugins can be configured through the context:
+
+```go
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("your-32-byte-secret-key-here!!!"),
+    EnablePluginSystem: true,
+    Plugins: []string{"csrf", "auth"},
+    
+    // Plugin-specific configuration
+    PluginConfig: map[string]interface{}{
+        "auth": map[string]interface{}{
+            "EnableEmailVerification": true,
+            "EnablePasswordReset": true,
+            "LoginPath": "/auth/login",
+            "RegisterPath": "/auth/register",
+        },
+        "csrf": map[string]interface{}{
+            "TokenLength": 32,
+            "CookieName": "csrf_token",
+        },
+    },
+})
+```
+
+### Migration from Feature Flags
+
+The plugin system provides backward compatibility with feature flags:
+
+```go
+// Old way (still supported)
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("secret"),
+    Features: guardian.Features{
+        EmailVerification: true,
+        PasswordReset: true,
+        CSRF: true,
+    },
+})
+
+// New way (recommended)
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("secret"),
+    EnablePluginSystem: true,
+    Plugins: []string{"csrf", "auth"},
+})
+```
+
+### Creating Custom Plugins
+
+Implement the Plugin interface to create custom plugins:
+
+```go
+type MyPlugin struct {
+    config MyPluginConfig
+}
+
+func (p *MyPlugin) Name() string {
+    return "myplugin"
+}
+
+func (p *MyPlugin) Description() string {
+    return "My custom plugin"
+}
+
+func (p *MyPlugin) Init(ctx *plugin.Context) error {
+    // Initialize plugin with database, session store, etc.
+    return nil
+}
+
+func (p *MyPlugin) Routes() []plugin.Route {
+    return []plugin.Route{
+        {
+            Method:  "GET",
+            Path:    "/my-route",
+            Handler: p.handleMyRoute,
+        },
+    }
+}
+
+func (p *MyPlugin) Middleware() []plugin.Middleware {
+    return []plugin.Middleware{
+        {
+            Name:    "my-middleware",
+            Handler: p.myMiddleware,
+        },
+    }
+}
+
+func (p *MyPlugin) Cleanup() error {
+    // Cleanup resources
+    return nil
+}
+
+// Register the plugin
+app.RegisterPlugin(&MyPlugin{})
+```
+
+### Plugin Lifecycle
+
+1. **Registration**: Plugins are registered during app initialization
+2. **Initialization**: `Init()` is called with access to core services
+3. **Route Setup**: Plugin routes are mounted after user middleware
+4. **Middleware Setup**: Plugin middleware is applied globally
+5. **Cleanup**: `Cleanup()` is called on app shutdown
+
+### Benefits of the Plugin System
+
+- **Modularity**: Enable only the features you need
+- **Maintainability**: Plugins are self-contained and easier to test
+- **Extensibility**: Easy to add custom functionality
+- **Performance**: Reduced overhead from unused features
+- **Clarity**: Clear separation of concerns
+
 ## Security Features
 
 ### Input Validation and Sanitization
@@ -1325,12 +1519,12 @@ type CreateUserInput struct {
 func createUser(w http.ResponseWriter, r *http.Request) {
     var input CreateUserInput
     if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-        web.NewResponse(w).Error("Invalid JSON", nil)
+        response.New(w, r).ErrorWithStatus(err, http.StatusBadRequest).Send()
         return
     }
     
     if err := security.ValidateInput(input); err != nil {
-        web.NewResponse(w).ValidationError(err)
+        response.New(w, r).ErrorWithStatus(err, http.StatusBadRequest).Send()
         return
     }
     
@@ -1365,9 +1559,11 @@ app.Use(middleware.CSRF)
 func formHandler(w http.ResponseWriter, r *http.Request) {
     token := middleware.GetCSRFToken(r)
     
-    web.NewResponse(w).HTML("form", map[string]interface{}{
+    // Render template with CSRF token
+    data := map[string]interface{}{
         "CSRFToken": token,
-    })
+    }
+    w.Write([]byte(renderTemplate("form", data)))
 }
 
 // Verify in API endpoints
@@ -2207,6 +2403,13 @@ type Guardian struct {
     Sessions() sessions.Store
     Listen(addr string) error
     ListenTLS(addr, certFile, keyFile string) error
+    
+    // Plugin Methods (v2)
+    RegisterPlugin(plugin Plugin) error
+    EnablePlugin(name string) error
+    DisablePlugin(name string) error
+    GetPlugin(name string) (Plugin, bool)
+    IsPluginEnabled(name string) bool
 }
 ```
 
@@ -2222,7 +2425,16 @@ type Config struct {
     MaxOpenConns        int
     MaxIdleConns        int
     ConnMaxLifetime     time.Duration
+    
+    // Plugin System (v2)
+    EnablePluginSystem  bool
+    Plugins            []string
+    PluginConfig       map[string]interface{}
+    
+    // Legacy
     Features            Features
+    
+    // Customization
     TableNames          TableNames
     ColumnNames         ColumnNames
     SessionBackend      SessionBackend
@@ -2301,6 +2513,52 @@ type DB interface {
     Ping() error
     Stats() sql.DBStats
     Close() error
+}
+```
+
+### Response Interface
+
+```go
+type Response interface {
+    Status(code int) Response
+    Header(key, value string) Response
+    ContentType(contentType string) Response
+    JSON(data any) Response
+    HTML(content string) Response
+    Text(content string) Response
+    Error(err error) Response
+    ErrorWithStatus(err error, status int) Response
+    Send() error
+}
+
+// Usage
+response.New(w, r).JSON(data).Send()
+response.New(w, r).Status(201).JSON(created).Send()
+response.New(w, r).ErrorWithStatus(err, 400).Send()
+```
+
+### Plugin Interface
+
+```go
+type Plugin interface {
+    Name() string
+    Description() string
+    Init(ctx *Context) error
+    Routes() []Route
+    Middleware() []Middleware
+    Cleanup() error
+}
+
+// Optional interfaces
+type LifecyclePlugin interface {
+    Plugin
+    OnStart() error
+    OnStop() error
+}
+
+type DependentPlugin interface {
+    Plugin
+    Dependencies() []string
 }
 ```
 
@@ -2420,9 +2678,9 @@ func main() {
 
 // Handler implementations...
 func homeHandler(w http.ResponseWriter, r *http.Request) {
-    web.NewResponse(w).HTML("home", map[string]interface{}{
-        "Title": "Welcome to Guardian",
-    })
+    response.New(w, r).
+        HTML(`<h1>Welcome to Guardian</h1>`).
+        Send()
 }
 
 func registerHandler(app *guardian.Guardian) http.HandlerFunc {
@@ -2432,31 +2690,31 @@ func registerHandler(app *guardian.Guardian) http.HandlerFunc {
             Password string `json:"password" validate:"required,min=8"`
         }
         
-        if err := web.ParseJSON(r, &input); err != nil {
-            web.NewResponse(w).Error("Invalid input", err)
+        if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+            response.New(w, r).ErrorWithStatus(err, http.StatusBadRequest).Send()
             return
         }
         
         user, err := app.Auth().Register(input.Email, input.Password)
         if err != nil {
-            web.NewResponse(w).Error("Registration failed", err)
+            response.New(w, r).ErrorWithStatus(err, http.StatusBadRequest).Send()
             return
         }
         
         // Auto-login
         err = app.Auth().CreateSession(w, r, user.ID, user.Email)
         if err != nil {
-            web.NewResponse(w).Error("Login failed", err)
+            response.New(w, r).Error(err).Send()
             return
         }
         
-        web.NewResponse(w).JSON(map[string]interface{}{
+        response.New(w, r).JSON(map[string]interface{}{
             "message": "Registration successful",
             "user": map[string]interface{}{
                 "id":    user.ID,
                 "email": user.Email,
             },
-        })
+        }).Send()
     }
 }
 ```
@@ -2504,7 +2762,7 @@ func echoHandler(c echo.Context) error {
 }
 
 func guardianHandler(w http.ResponseWriter, r *http.Request) {
-    web.NewResponse(w).JSON(data)
+    response.New(w, r).JSON(data).Send()
 }
 ```
 
@@ -2539,39 +2797,39 @@ type TodoHandler struct {
 
 func (h *TodoHandler) Index(w http.ResponseWriter, r *http.Request) {
     todos := h.fetchTodos()
-    web.NewResponse(w).JSON(todos)
+    response.New(w, r).JSON(todos).Send()
 }
 
 func (h *TodoHandler) Create(w http.ResponseWriter, r *http.Request) {
     var todo Todo
-    if err := web.ParseJSON(r, &todo); err != nil {
-        web.NewResponse(w).Error("Invalid input", err)
+    if err := json.NewDecoder(r.Body).Decode(&todo); err != nil {
+        response.New(w, r).ErrorWithStatus(err, http.StatusBadRequest).Send()
         return
     }
     
     created := h.createTodo(todo)
-    web.NewResponse(w).Status(201).JSON(created)
+    response.New(w, r).Status(201).JSON(created).Send()
 }
 
 func (h *TodoHandler) Show(w http.ResponseWriter, r *http.Request) {
     id := chi.URLParam(r, "id")
     todo := h.getTodo(id)
-    web.NewResponse(w).JSON(todo)
+    response.New(w, r).JSON(todo).Send()
 }
 
 func (h *TodoHandler) Update(w http.ResponseWriter, r *http.Request) {
     id := chi.URLParam(r, "id")
     var updates Todo
-    web.ParseJSON(r, &updates)
+    json.NewDecoder(r.Body).Decode(&updates)
     
     updated := h.updateTodo(id, updates)
-    web.NewResponse(w).JSON(updated)
+    response.New(w, r).JSON(updated).Send()
 }
 
 func (h *TodoHandler) Delete(w http.ResponseWriter, r *http.Request) {
     id := chi.URLParam(r, "id")
     h.deleteTodo(id)
-    web.NewResponse(w).Status(204).Empty()
+    response.New(w, r).Status(204).Send()
 }
 
 // Register routes
@@ -2711,6 +2969,117 @@ app.DELETE("/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
     ctx.HXOOBSwap("partials/todo-count", count, "#todo-count")
 })
 ```
+
+## Migration Guide
+
+### Migrating from v1 to v2
+
+Guardian v2 introduces several improvements that may require code changes:
+
+#### 1. Response Builder Changes
+
+The response builder has moved from the `web` package to a dedicated `response` package:
+
+```go
+// Old (v1)
+import "github.com/flyzard/go-guardian/web"
+
+web.NewResponse(w).
+    JSON(data)
+
+// New (v2)
+import "github.com/flyzard/go-guardian/response"
+
+response.New(w, r).
+    JSON(data).
+    Send()
+```
+
+Key changes:
+- `web.NewResponse(w)` → `response.New(w, r)` (now requires request)
+- Must call `.Send()` to send the response
+- Automatic HTMX detection and handling
+
+#### 2. Error Handling
+
+The `WebError` type and methods have been simplified:
+
+```go
+// Old (v1)
+web.NewResponse(w).WebError(
+    web.NotFound("User not found").
+        WithField("id", userID),
+)
+
+// New (v2)
+response.New(w, r).
+    ErrorWithStatus(
+        fmt.Errorf("user not found: %s", userID),
+        http.StatusNotFound,
+    ).
+    Send()
+```
+
+#### 3. Feature Flags → Plugin System
+
+Migrate from feature flags to the plugin system:
+
+```go
+// Old (v1)
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("secret"),
+    Features: guardian.Features{
+        EmailVerification: true,
+        PasswordReset: true,
+        RBAC: true,
+    },
+})
+
+// New (v2)
+app := guardian.New(guardian.Config{
+    SessionKey: []byte("secret"),
+    EnablePluginSystem: true,
+    Plugins: []string{"csrf", "auth", "rbac"},
+})
+```
+
+#### 4. Removed Deprecated Methods
+
+The following methods have been removed:
+
+- `Handler.JSON()` → Use `response.New(w, r).JSON(data).Send()`
+- `Handler.Error()` → Use `response.New(w, r).Error(err).Send()`
+- `Handler.Redirect()` → Use `http.Redirect()`
+- `Context.IsHTMX()` → Use `htmx.IsRequest(r)`
+- `Context.HXRedirect()` → Use `htmx.SetRedirect(w, url)`
+
+#### 5. Handler Composition Updates
+
+Handler facades now support shared data and better composition:
+
+```go
+// New pattern for handler groups
+handlers := web.NewHandlerFacade("/api/v1").
+    WithSharedData("service", myService).
+    WithHandler("list", listHandler).
+    WithHandler("create", createHandler).
+    Build()
+```
+
+### Compatibility Notes
+
+- Feature flags are still supported for backward compatibility
+- The old auth service methods continue to work
+- Database schemas remain unchanged
+- Session handling is unchanged
+
+### Recommended Migration Steps
+
+1. **Update imports**: Change `web.NewResponse` imports to `response`
+2. **Add `.Send()`**: All response builder chains must end with `.Send()`
+3. **Update error handling**: Replace `WebError` with `Error` or `ErrorWithStatus`
+4. **Enable plugin system**: Add `EnablePluginSystem: true` to your config
+5. **Test thoroughly**: The changes are mostly API surface; functionality remains the same
 
 ## License
 
