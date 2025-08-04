@@ -1,5 +1,5 @@
-// Package realtime provides real-time data handling patterns for web applications
-package realtime
+// Package cache provides command execution patterns with response caching for web applications
+package cache
 
 import (
 	"context"

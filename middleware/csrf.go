@@ -10,6 +10,7 @@ import (
 const (
 	csrfCookieName = "csrf_token"
 	csrfHeaderName = "X-CSRF-Token"
+	CSRFTokenKey   = "_csrf" // Form field name for CSRF token
 )
 
 // CSRFConfig holds CSRF middleware configuration
@@ -97,4 +98,13 @@ func generateCSRFToken() string {
 	b := make([]byte, 32)
 	rand.Read(b)
 	return base64.URLEncoding.EncodeToString(b)
+}
+
+// GetCSRFToken retrieves the CSRF token from the request
+func GetCSRFToken(r *http.Request) string {
+	cookie, err := r.Cookie(csrfCookieName)
+	if err != nil {
+		return ""
+	}
+	return cookie.Value
 }

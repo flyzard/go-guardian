@@ -40,7 +40,7 @@ func ValidateIDInRange(paramName string, min, max int64) ValidationFunc {
 func ValidateSearchQuery(paramName string, maxLength int, allowedChars string) ValidationFunc {
 	return func(r *http.Request) error {
 		value := r.URL.Query().Get(paramName)
-		
+
 		// Empty search is valid
 		if value == "" {
 			return nil

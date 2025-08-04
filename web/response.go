@@ -3,11 +3,13 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"strings"
 	"time"
-	
-	"github.com/flyzard/go-guardian/web/template"
+
+	"github.com/flyzard/go-guardian/web/notification"
+	guardianTemplate "github.com/flyzard/go-guardian/web/template"
 )
 
 // ResponseBuilder provides a fluent interface for building HTTP responses
@@ -16,7 +18,7 @@ type ResponseBuilder struct {
 	statusCode      int
 	headers         map[string]string
 	content         strings.Builder
-	templateManager *template.Manager
+	templateManager *guardianTemplate.Manager
 }
 
 // NewResponse creates a new response builder
@@ -63,6 +65,12 @@ func (b *ResponseBuilder) JSON(data any) *ResponseBuilder {
 // HTML adds raw HTML content
 func (b *ResponseBuilder) HTML(html string) *ResponseBuilder {
 	b.content.WriteString(html)
+	return b
+}
+
+// HTMLTemplate adds HTML template content
+func (b *ResponseBuilder) HTMLTemplate(html template.HTML) *ResponseBuilder {
+	b.content.WriteString(string(html))
 	return b
 }
 
@@ -143,7 +151,7 @@ func (b *ResponseBuilder) WebError(err error) *ResponseBuilder {
 	}
 
 	b.statusCode = webErr.StatusCode
-	
+
 	// Choose appropriate alert type based on error type
 	alertType := AlertDanger
 	switch webErr.Type {
@@ -201,7 +209,7 @@ func (b *ResponseBuilder) HTMXTrigger(events string) *ResponseBuilder {
 func (b *ResponseBuilder) Toast(toastType, message string, duration int) *ResponseBuilder {
 	// Generate unique ID for the toast
 	toastID := fmt.Sprintf("toast-%d", time.Now().UnixNano())
-	
+
 	// Build toast HTML with auto-dismiss
 	b.content.WriteString(fmt.Sprintf(`
 	<div id="%s" class="toast toast-%s" style="animation-duration: %dms">
@@ -212,11 +220,111 @@ func (b *ResponseBuilder) Toast(toastType, message string, duration int) *Respon
 			}, %d);
 		</script>
 	</div>`, toastID, toastType, duration, message, toastID, duration))
+
+	// Set HTMX headers to append to toast container
+	b.headers["HX-Retarget"] = "#toast-container"
+	b.headers["HX-Reswap"] = "beforeend"
+
+	return b
+}
+
+// ToastSuccess creates a success toast notification
+func (b *ResponseBuilder) ToastSuccess(message string) *ResponseBuilder {
+	toast := notification.NewToast(notification.ToastSuccess, message)
+	b.content.WriteString(toast.Build())
 	
 	// Set HTMX headers to append to toast container
 	b.headers["HX-Retarget"] = "#toast-container"
 	b.headers["HX-Reswap"] = "beforeend"
 	
+	return b
+}
+
+// ToastError creates an error toast notification
+func (b *ResponseBuilder) ToastError(message string) *ResponseBuilder {
+	toast := notification.NewToast(notification.ToastError, message)
+	b.content.WriteString(toast.Build())
+	
+	// Set HTMX headers to append to toast container
+	b.headers["HX-Retarget"] = "#toast-container"
+	b.headers["HX-Reswap"] = "beforeend"
+	
+	return b
+}
+
+// ToastWarning creates a warning toast notification
+func (b *ResponseBuilder) ToastWarning(message string) *ResponseBuilder {
+	toast := notification.NewToast(notification.ToastWarning, message)
+	b.content.WriteString(toast.Build())
+	
+	// Set HTMX headers to append to toast container
+	b.headers["HX-Retarget"] = "#toast-container"
+	b.headers["HX-Reswap"] = "beforeend"
+	
+	return b
+}
+
+// ToastInfo creates an info toast notification
+func (b *ResponseBuilder) ToastInfo(message string) *ResponseBuilder {
+	toast := notification.NewToast(notification.ToastInfo, message)
+	b.content.WriteString(toast.Build())
+	
+	// Set HTMX headers to append to toast container
+	b.headers["HX-Retarget"] = "#toast-container"
+	b.headers["HX-Reswap"] = "beforeend"
+	
+	return b
+}
+
+// ToastWithAction creates a toast with an action button
+func (b *ResponseBuilder) ToastWithAction(toastType notification.ToastType, message, actionText, actionURL string) *ResponseBuilder {
+	toast := notification.NewToast(toastType, message)
+	toast.WithAction(notification.Action{
+		Text:   actionText,
+		URL:    actionURL,
+		Method: "GET",
+	})
+	
+	b.content.WriteString(toast.Build())
+	
+	// Set HTMX headers to append to toast container
+	b.headers["HX-Retarget"] = "#toast-container"
+	b.headers["HX-Reswap"] = "beforeend"
+	
+	return b
+}
+
+// ToastBuilder returns a toast builder for more complex toasts
+func (b *ResponseBuilder) ToastBuilder(toastType notification.ToastType, message string) *notification.ToastBuilder {
+	return notification.NewToastBuilder(toastType, message)
+}
+
+// AddToast adds a pre-built toast to the response
+func (b *ResponseBuilder) AddToast(toast *notification.Toast) *ResponseBuilder {
+	b.content.WriteString(toast.Build())
+	
+	// Set HTMX headers to append to toast container
+	b.headers["HX-Retarget"] = "#toast-container"
+	b.headers["HX-Reswap"] = "beforeend"
+	
+	return b
+}
+
+// AlertWithActions adds an enhanced alert with action buttons
+func (b *ResponseBuilder) AlertWithActions(alertType AlertType, title, message string, actions ...notification.Action) *ResponseBuilder {
+	alert := notification.NewEnhancedAlert(string(alertType), title, message)
+	for _, action := range actions {
+		alert.WithAction(action)
+	}
+	
+	b.content.WriteString(alert.Build())
+	return b
+}
+
+// AlertDismissible adds a dismissible alert
+func (b *ResponseBuilder) AlertDismissible(alertType AlertType, message string) *ResponseBuilder {
+	alert := notification.NewEnhancedAlert(string(alertType), "", message)
+	b.content.WriteString(alert.Build())
 	return b
 }
 
@@ -443,7 +551,7 @@ func IsHTMXWithTarget(r *http.Request, target string) bool {
 // Template Methods
 
 // WithTemplateManager sets the template manager for rendering templates
-func (b *ResponseBuilder) WithTemplateManager(tm *template.Manager) *ResponseBuilder {
+func (b *ResponseBuilder) WithTemplateManager(tm *guardianTemplate.Manager) *ResponseBuilder {
 	b.templateManager = tm
 	return b
 }
@@ -454,7 +562,7 @@ func (b *ResponseBuilder) Template(name string, data interface{}) *ResponseBuild
 		b.Error("Template manager not configured", http.StatusInternalServerError)
 		return b
 	}
-	
+
 	err := b.templateManager.Render(&b.content, name, data)
 	if err != nil {
 		b.Error(fmt.Sprintf("Failed to render template: %v", err), http.StatusInternalServerError)
@@ -468,7 +576,7 @@ func (b *ResponseBuilder) Partial(templateSet, partialName string, data interfac
 		b.Error("Template manager not configured", http.StatusInternalServerError)
 		return b
 	}
-	
+
 	err := b.templateManager.RenderPartial(&b.content, templateSet, partialName, data)
 	if err != nil {
 		b.Error(fmt.Sprintf("Failed to render partial: %v", err), http.StatusInternalServerError)
@@ -481,12 +589,12 @@ func (b *ResponseBuilder) HTMXPartial(template string, data interface{}) *Respon
 	// Mark as HTMX partial response
 	b.headers["HX-Retarget"] = "this"
 	b.headers["HX-Reswap"] = "outerHTML"
-	
+
 	if b.templateManager == nil {
 		b.Error("Template manager not configured", http.StatusInternalServerError)
 		return b
 	}
-	
+
 	err := b.templateManager.Render(&b.content, template, data)
 	if err != nil {
 		b.Error(fmt.Sprintf("Failed to render HTMX partial: %v", err), http.StatusInternalServerError)
@@ -495,7 +603,7 @@ func (b *ResponseBuilder) HTMXPartial(template string, data interface{}) *Respon
 }
 
 // Component renders a component by name with properties
-func (b *ResponseBuilder) Component(name string, props map[string]interface{}) *ResponseBuilder {
+func (b *ResponseBuilder) Component(name string, props map[string]any) *ResponseBuilder {
 	// This would require component registry to be accessible
 	// For now, we'll add this as a placeholder
 	b.content.WriteString(fmt.Sprintf("<!-- Component: %s -->", name))
@@ -503,7 +611,7 @@ func (b *ResponseBuilder) Component(name string, props map[string]interface{}) *
 }
 
 // Layout starts a layout-based render
-func (b *ResponseBuilder) Layout(name string) *template.Layout {
+func (b *ResponseBuilder) Layout(name string) *guardianTemplate.Layout {
 	if b.templateManager == nil {
 		return nil
 	}
