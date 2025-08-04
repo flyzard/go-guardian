@@ -124,12 +124,8 @@ func Static(urlPrefix string, config StaticConfig) func(http.Handler) http.Handl
 				if indexInfo, err := os.Stat(indexPath); err == nil && !indexInfo.IsDir() {
 					fullPath = indexPath
 					info = indexInfo
-				} else if !config.Browse {
-					// Directory browsing not allowed
-					http.NotFound(w, r)
-					return
 				} else {
-					// TODO: Implement directory listing
+					// Directory browsing not allowed
 					http.NotFound(w, r)
 					return
 				}

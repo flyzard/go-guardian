@@ -5,6 +5,14 @@ import (
 	"reflect"
 )
 
+// Configuration errors
+var (
+	ErrInvalidSessionKey   = errors.New("session key must be exactly 32 bytes")
+	ErrInvalidDatabaseType = errors.New("database type must be 'sqlite' or 'mysql'")
+	ErrMissingDatabasePath = errors.New("database path is required for SQLite")
+	ErrMissingDatabaseDSN  = errors.New("database DSN is required for MySQL")
+)
+
 // Configurable provides a standard interface for all configurations
 type Configurable[T any] interface {
 	// Defaults returns the default configuration

@@ -123,28 +123,6 @@ func (v *SchemaValidator) ValidateWithMapping(mapping TableMapping) error {
 		}
 	}
 
-	// Check sessions table if provided in mapping
-	if mapping.Sessions != "" {
-		exists, err := v.tableExists(mapping.Sessions)
-		if err != nil {
-			return fmt.Errorf("error checking sessions table %s: %w", mapping.Sessions, err)
-		}
-		if !exists {
-			return fmt.Errorf("sessions table '%s' does not exist (required for database session backend)", mapping.Sessions)
-		}
-
-		// Check sessions columns
-		for _, column := range ConditionalColumns["sessions"] {
-			exists, err := v.columnExists(mapping.Sessions, column)
-			if err != nil {
-				return fmt.Errorf("error checking column %s.%s: %w", mapping.Sessions, column, err)
-			}
-			if !exists {
-				return fmt.Errorf("required column '%s.%s' does not exist", mapping.Sessions, column)
-			}
-		}
-	}
-
 	// Check remember_tokens table if provided in mapping
 	if mapping.RememberTokens != "" {
 		exists, err := v.tableExists(mapping.RememberTokens)

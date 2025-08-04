@@ -388,7 +388,3 @@ func (s *Service) IsFeatureEnabled(feature string) bool {
 	}
 }
 
-// SessionsTable returns the sessions table name, if configured
-func (s *Service) SessionsTable() string {
-	return s.tables.Sessions
-}

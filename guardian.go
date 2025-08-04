@@ -21,9 +21,8 @@ import (
 type SessionBackend string
 
 const (
-	SessionBackendCookie   SessionBackend = "cookie"   // Default: encrypted cookies
-	SessionBackendMemory   SessionBackend = "memory"   // In-memory store
-	SessionBackendDatabase SessionBackend = "database" // Database-backed sessions
+	SessionBackendCookie SessionBackend = "cookie" // Default: encrypted cookies
+	SessionBackendMemory SessionBackend = "memory" // In-memory store
 )
 
 // TableNames is an alias to config.TableNames for backward compatibility
@@ -218,9 +217,6 @@ func New(cfg Config) *Guardian {
 		if cfg.Features.EmailVerification || cfg.Features.PasswordReset {
 			cfg.TableNames.Tokens = defaults.Tokens
 		}
-		if cfg.SessionBackend == SessionBackendDatabase {
-			cfg.TableNames.Sessions = defaults.Sessions
-		}
 		if cfg.Features.RBAC {
 			cfg.TableNames.Roles = defaults.Roles
 			cfg.TableNames.Permissions = defaults.Permissions
@@ -238,11 +234,6 @@ func New(cfg Config) *Guardian {
 		if cfg.Features.EmailVerification || cfg.Features.PasswordReset {
 			if cfg.TableNames.Tokens == "" {
 				cfg.TableNames.Tokens = defaults.Tokens
-			}
-		}
-		if cfg.SessionBackend == SessionBackendDatabase {
-			if cfg.TableNames.Sessions == "" {
-				cfg.TableNames.Sessions = defaults.Sessions
 			}
 		}
 		if cfg.Features.RBAC {
@@ -289,7 +280,6 @@ func New(cfg Config) *Guardian {
 			TableNames: database.TableMapping{
 				Users:           cfg.TableNames.Users,
 				Tokens:          cfg.TableNames.Tokens,
-				Sessions:        cfg.TableNames.Sessions,
 				Roles:           cfg.TableNames.Roles,
 				Permissions:     cfg.TableNames.Permissions,
 				RolePermissions: cfg.TableNames.RolePermissions,
@@ -310,7 +300,6 @@ func New(cfg Config) *Guardian {
 			TableNames: database.TableMapping{
 				Users:           cfg.TableNames.Users,
 				Tokens:          cfg.TableNames.Tokens,
-				Sessions:        cfg.TableNames.Sessions,
 				Roles:           cfg.TableNames.Roles,
 				Permissions:     cfg.TableNames.Permissions,
 				RolePermissions: cfg.TableNames.RolePermissions,
@@ -339,10 +328,6 @@ func New(cfg Config) *Guardian {
 			mapping.Tokens = cfg.TableNames.Tokens
 		}
 
-		// Only require sessions table if using database sessions
-		if cfg.SessionBackend == SessionBackendDatabase {
-			mapping.Sessions = cfg.TableNames.Sessions
-		}
 
 		// Only require RBAC tables if RBAC is enabled
 		if cfg.Features.RBAC {
@@ -401,14 +386,6 @@ func New(cfg Config) *Guardian {
 		log.Println("⚠️  Using in-memory sessions - sessions will be lost on restart")
 		log.Println("⚠️  Not suitable for production multi-server deployments")
 
-	case SessionBackendDatabase:
-		// For database sessions, we'd need to implement a custom store
-		// This would require:
-		// 1. Implementing sessions.Store interface
-		// 2. Storing session data in the sessions table
-		// 3. Handling session cleanup/expiration
-		// 4. Proper serialization of session values
-		panic("Database session backend not yet implemented. Please use 'cookie' or 'memory' backends.")
 
 	default:
 		panic("unsupported session backend: " + string(cfg.SessionBackend))
@@ -421,7 +398,6 @@ func New(cfg Config) *Guardian {
 		TableNames: auth.TableConfig{
 			Users:           cfg.TableNames.Users,
 			Tokens:          cfg.TableNames.Tokens,
-			Sessions:        cfg.TableNames.Sessions,
 			Roles:           cfg.TableNames.Roles,
 			Permissions:     cfg.TableNames.Permissions,
 			RolePermissions: cfg.TableNames.RolePermissions,

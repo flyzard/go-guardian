@@ -206,10 +206,6 @@ func (db *DB) TokensTable() string {
 	return db.tableNames.Tokens
 }
 
-func (db *DB) SessionsTable() string {
-	return db.tableNames.Sessions
-}
-
 func (db *DB) RolesTable() string {
 	return db.tableNames.Roles
 }

@@ -2,7 +2,6 @@ package response
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/flyzard/go-guardian/htmx"
 	"github.com/flyzard/go-guardian/web/notification"
@@ -134,14 +133,3 @@ func (n *NotificationBuilder) ToastWithAction(toastType notification.ToastType, 
 	return n.b
 }
 
-// Helper to create alert HTML with icons
-func createAlert(alertType, message string, icon string) string {
-	var html strings.Builder
-	html.WriteString(fmt.Sprintf(`<div class="alert alert-%s">`, alertType))
-	if icon != "" {
-		html.WriteString(fmt.Sprintf(`<strong>%s</strong> `, icon))
-	}
-	html.WriteString(message)
-	html.WriteString(`</div>`)
-	return html.String()
-}
